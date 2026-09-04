@@ -1,3 +1,7 @@
+- id: ui-sidebar
+  name: '@deepseek-ai/dsh-client-ui-sidebar'
+  disabled: true
+
 - insert:
     - id: dsh-personal-studio
       name: dsh-personal-studio

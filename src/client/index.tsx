@@ -1,8 +1,8 @@
 import {
   useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore,
 } from 'react'
+import { createPortal } from 'react-dom'
 import {
-  IconChevronDownOutline14,
   IconChevronRightOutline14,
   IconCloseOutline16,
   IconEditOutline16,
@@ -20,6 +20,26 @@ type Theme = 'dark' | 'light'
 type ProjectKind = 'attached' | 'generated'
 type AiMode = 'analyze' | 'build'
 type PaneKind = 'overview' | 'files' | 'data' | 'report'
+type ProjectLaunch = 'workspace' | 'web' | 'worktable'
+
+type ProjectSection = {
+  id: string
+  name: string
+  workspaceId: string
+  path: string
+}
+
+type DataConnection = {
+  kind: 'project-files' | 'sqlite' | 'http'
+  location: string
+  readOnly: boolean
+}
+
+type Brand = {
+  name: string
+  tagline: string
+  logo: string
+}
 
 type Project = {
   id: string
@@ -29,6 +49,10 @@ type Project = {
   workspaceId: string
   path: string
   panes: PaneKind[]
+  paneSources: string[]
+  sections: ProjectSection[]
+  launch: ProjectLaunch
+  data: DataConnection
   aiMode: AiMode
   sessions: Partial<Record<AiMode, string>>
 }
@@ -37,10 +61,13 @@ type StudioState = {
   projects: Project[]
   activeId: string | null
   theme: Theme
+  brand: Brand
 }
 
 const STORAGE_KEY = 'dsh.personal-studio.projects.v1'
 const THEME_KEY = 'dsh.personal-studio.theme.v1'
+const BRAND_KEY = 'dsh.personal-studio.brand.v1'
+const DEFAULT_BRAND: Brand = { name: 'DSH Personal Studio', tagline: '个人智能工作空间', logo: '' }
 
 function loadProjects(): Project[] {
   try {
@@ -54,6 +81,21 @@ function loadProjects(): Project[] {
       workspaceId: String(item.workspaceId ?? ''),
       path: String(item.path ?? ''),
       panes: Array.isArray(item.panes) ? item.panes : ['overview'],
+      paneSources: Array.isArray(item.paneSources) ? item.paneSources.map(String) : [],
+      sections: Array.isArray(item.sections) && item.sections.length > 0
+        ? item.sections.map((section: any) => ({
+          id: String(section.id ?? projectId()),
+          name: String(section.name ?? '项目分区'),
+          workspaceId: String(section.workspaceId ?? item.workspaceId ?? ''),
+          path: String(section.path ?? item.path ?? ''),
+        })).filter((section: ProjectSection) => section.workspaceId !== '' && section.path !== '')
+        : [{ id: projectId(), name: '主项目', workspaceId: String(item.workspaceId ?? ''), path: String(item.path ?? '') }],
+      launch: (['workspace', 'web', 'worktable'].includes(item.launch) ? item.launch : 'workspace') as ProjectLaunch,
+      data: {
+        kind: (['project-files', 'sqlite', 'http'].includes(item.data?.kind) ? item.data.kind : 'project-files') as DataConnection['kind'],
+        location: String(item.data?.location ?? ''),
+        readOnly: item.data?.readOnly !== false,
+      },
       aiMode: item.aiMode === 'build' ? 'build' : 'analyze',
       sessions: item.sessions && typeof item.sessions === 'object' ? item.sessions : {},
     })).filter((item: Project) => item.workspaceId !== '' && item.path !== '')
@@ -62,18 +104,31 @@ function loadProjects(): Project[] {
   }
 }
 
+function loadBrand(): Brand {
+  try {
+    const value = JSON.parse(localStorage.getItem(BRAND_KEY) ?? 'null')
+    if (value === null || typeof value !== 'object') return DEFAULT_BRAND
+    return {
+      name: String(value.name ?? DEFAULT_BRAND.name),
+      tagline: String(value.tagline ?? DEFAULT_BRAND.tagline),
+      logo: typeof value.logo === 'string' ? value.logo : '',
+    }
+  } catch { return DEFAULT_BRAND }
+}
+
 function loadTheme(): Theme {
   if (document.body.hasAttribute('data-ds-dark-theme')) return 'dark'
   return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark'
 }
 
-let snapshot: StudioState = { projects: loadProjects(), activeId: null, theme: loadTheme() }
+let snapshot: StudioState = { projects: loadProjects(), activeId: null, theme: loadTheme(), brand: loadBrand() }
 const listeners = new Set<() => void>()
 
 function commit(next: StudioState): void {
   snapshot = next
   localStorage.setItem(STORAGE_KEY, JSON.stringify(next.projects))
   localStorage.setItem(THEME_KEY, next.theme)
+  localStorage.setItem(BRAND_KEY, JSON.stringify(next.brand))
   listeners.forEach(listener => { listener() })
 }
 
@@ -85,6 +140,7 @@ const studio = {
   getSnapshot() { return snapshot },
   setActive(activeId: string | null) { commit({ ...snapshot, activeId }) },
   setTheme(theme: Theme) { commit({ ...snapshot, theme }) },
+  setBrand(brand: Brand) { commit({ ...snapshot, brand }) },
   add(project: Project) {
     commit({ ...snapshot, projects: [...snapshot.projects, project], activeId: project.id })
   },
@@ -161,7 +217,11 @@ async function promptIntoSession(sessionId: string, text: string): Promise<void>
 }
 
 function modePrompt(project: Project, mode: AiMode): string {
-  const boundary = `项目名称：${project.name}\n项目根目录：${project.path}`
+  const sections = project.sections.map(section => `- ${section.name}: ${section.path}`).join('\n')
+  const data = project.data.kind === 'project-files'
+    ? '项目文件与产物目录'
+    : `${project.data.kind.toUpperCase()}：${project.data.location || '尚未配置地址'}`
+  const boundary = `项目名称：${project.name}\n项目根目录：${project.path}\n启动类型：${project.launch}\n项目分区：\n${sections}\n数据接口：${data}\n数据权限：${project.data.readOnly ? '只读' : '允许写入'}`
   if (mode === 'analyze') {
     return `【项目分析模式】\n${boundary}\n请把当前工作区视为唯一项目数据边界。默认只读取项目文件、数据产物和版本状态，先不要修改文件。你可以为我总结、分析、核对和形成报告。请简短确认已进入分析模式。`
   }
@@ -647,21 +707,362 @@ html[data-dsh-studio-theme="light"] .dsh-studio-ai-sidebar-head button:hover { b
 html[data-dsh-studio-theme="light"] .dsh-studio-ai-modes { background: rgba(35,111,166,.055); }
 html[data-dsh-studio-theme="light"] .dsh-studio-ai-modes button.active { background: rgba(23,118,188,.1); color: #176ea9; }
 
+/* Apple-inspired desktop material system: quiet hierarchy, direct feedback, reversible panels. */
+:root {
+  --studio-ink: rgba(255,255,255,.94);
+  --studio-muted: rgba(235,235,245,.6);
+  --studio-dim: rgba(235,235,245,.3);
+  --studio-blue: #0a84ff;
+  --studio-blue-soft: rgba(10,132,255,.16);
+  --studio-orange: #ff9f0a;
+  --studio-field: #0b0b0d;
+  --studio-panel: rgba(28,28,30,.82);
+  --studio-separator: rgba(255,255,255,.08);
+  --studio-fill: rgba(255,255,255,.075);
+  --studio-fill-hover: rgba(255,255,255,.11);
+}
+
+[data-dsh-studio-sidebar-root] {
+  background: rgba(22,22,24,.92) !important;
+  border-right-color: var(--studio-separator) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  backdrop-filter: blur(28px) saturate(160%);
+}
+.dsh-studio-sidebar { color: var(--studio-ink); }
+.dsh-studio-section-head { height: 40px; padding: 0 10px; border-radius: 10px; color: var(--studio-muted); }
+.dsh-studio-section-head:hover { background: var(--studio-fill); }
+.dsh-studio-section-head strong { color: var(--studio-ink); font-size: 12px; font-weight: 590; letter-spacing: 0; }
+.dsh-studio-section-head .hint { color: var(--studio-dim); font-size: 9px; }
+.dsh-studio-theme-button, .dsh-studio-ai-toggle, .dsh-studio-icon-button, .dsh-studio-rail-button { color: var(--studio-muted); }
+.dsh-studio-theme-button:hover, .dsh-studio-ai-toggle:hover, .dsh-studio-ai-toggle.active, .dsh-studio-icon-button:hover, .dsh-studio-rail-button:hover { background: var(--studio-fill-hover); color: var(--studio-ink); }
+.dsh-studio-projects { gap: 3px; padding: 4px 6px 2px; }
+.dsh-studio-project-row { height: 34px; padding: 0 9px; border-radius: 8px; color: var(--studio-muted); }
+.dsh-studio-project-row:hover { background: var(--studio-fill); color: var(--studio-ink); }
+.dsh-studio-project-row.active { background: rgba(10,132,255,.18); color: #fff; box-shadow: none; }
+.dsh-studio-project-row small { color: var(--studio-dim); font-size: 8px; font-weight: 560; letter-spacing: .04em; }
+.dsh-studio-empty { border: 0; border-radius: 10px; background: rgba(255,255,255,.035); color: var(--studio-dim); }
+
+.dsh-studio-menu {
+  padding: 5px;
+  border-color: rgba(255,255,255,.1);
+  border-radius: 12px;
+  background: rgba(38,38,40,.9);
+  box-shadow: 0 18px 50px rgba(0,0,0,.38), 0 1px 0 rgba(255,255,255,.08) inset;
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  backdrop-filter: blur(30px) saturate(180%);
+}
+.dsh-studio-menu button { height: 32px; border-radius: 7px; font-size: 12px; }
+.dsh-studio-menu button:hover { background: rgba(255,255,255,.09); }
+
+.dsh-studio-dialog-backdrop { background: rgba(0,0,0,.38); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+.dsh-studio-dialog {
+  width: min(440px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  padding: 24px;
+  border-color: rgba(255,255,255,.1);
+  border-radius: 20px;
+  background: rgba(30,30,32,.9);
+  box-shadow: 0 28px 80px rgba(0,0,0,.48), 0 1px 0 rgba(255,255,255,.09) inset;
+  -webkit-backdrop-filter: blur(34px) saturate(170%);
+  backdrop-filter: blur(34px) saturate(170%);
+}
+.dsh-studio-dialog-head h2 { font-size: 18px; font-weight: 650; letter-spacing: -.012em; }
+.dsh-studio-field { gap: 8px; margin: 15px 0; }
+.dsh-studio-field label { color: var(--studio-muted); font-size: 11px; font-weight: 510; }
+.dsh-studio-field input, .dsh-studio-field select {
+  height: 42px;
+  border-color: rgba(255,255,255,.1);
+  border-radius: 10px;
+  background: rgba(255,255,255,.065);
+  color: var(--studio-ink);
+}
+.dsh-studio-field input:focus, .dsh-studio-field select:focus { border-color: var(--studio-blue); box-shadow: 0 0 0 3px rgba(10,132,255,.2); }
+.dsh-studio-field input[type="file"] { height: auto; min-height: 42px; padding: 5px; color: var(--studio-muted); font-size: 11px; }
+.dsh-studio-field input[type="file"]::file-selector-button { height: 30px; margin-right: 9px; border: 0; border-radius: 7px; padding: 0 11px; background: var(--studio-fill); color: var(--studio-ink); font: inherit; cursor: pointer; }
+.dsh-studio-folder-button, .dsh-studio-button { border-radius: 10px; background: var(--studio-fill); color: var(--studio-ink); }
+.dsh-studio-folder-button { height: 38px; border-color: rgba(255,255,255,.08); }
+.dsh-studio-folder-button:hover, .dsh-studio-button:hover { background: var(--studio-fill-hover); }
+.dsh-studio-button.primary { background: var(--studio-blue); color: #fff; font-weight: 620; }
+.dsh-studio-project-binding { border-radius: 11px; background: var(--studio-fill); }
+.dsh-studio-project-binding strong { color: var(--studio-ink); }
+
+.dsh-studio-overlay { background: var(--studio-field); }
+.dsh-studio-topbar {
+  border-bottom-color: var(--studio-separator);
+  background: rgba(22,22,24,.78);
+  -webkit-backdrop-filter: blur(28px) saturate(170%);
+  backdrop-filter: blur(28px) saturate(170%);
+}
+.dsh-studio-topbar .project-mark { border-radius: 8px; background: rgba(10,132,255,.16); color: #409cff; }
+.dsh-studio-topbar h1 { color: var(--studio-ink); font-size: 13px; font-weight: 620; letter-spacing: -.006em; }
+.dsh-studio-topbar .path { color: var(--studio-dim); font-size: 9px; }
+.dsh-studio-layouts { gap: 2px; padding: 3px; border-radius: 9px; background: rgba(255,255,255,.055); }
+.dsh-studio-layout-button { height: 25px; border-radius: 7px; color: var(--studio-muted); }
+.dsh-studio-layout-button:hover { background: rgba(255,255,255,.07); color: var(--studio-ink); }
+.dsh-studio-layout-button.active { background: rgba(255,255,255,.13); color: var(--studio-ink); box-shadow: 0 1px 3px rgba(0,0,0,.22); }
+
+.dsh-studio-stage { padding: 14px; transition: padding-right 320ms cubic-bezier(.22,1,.36,1); }
+.dsh-studio-stage.ai-open { padding-right: 400px; }
+.dsh-studio-surface {
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 16px;
+  background: rgba(28,28,30,.76);
+  box-shadow: 0 18px 50px rgba(0,0,0,.24), 0 1px 0 rgba(255,255,255,.055) inset;
+  -webkit-backdrop-filter: blur(22px) saturate(145%);
+  backdrop-filter: blur(22px) saturate(145%);
+}
+.dsh-studio-pane, .dsh-studio-pane:nth-of-type(even) { background: rgba(28,28,30,.58); }
+.dsh-studio-pane-bar { background: rgba(28,28,30,.68); color: var(--studio-dim); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.dsh-studio-pane-bar button, .dsh-studio-pane-bar select { background: var(--studio-fill); color: var(--studio-muted); }
+.dsh-studio-project-pane .glyph, .dsh-studio-empty-pane-content .glyph { border-radius: 12px; background: rgba(10,132,255,.14); color: #409cff; }
+.dsh-studio-project-pane .eyebrow { color: var(--studio-dim); font-weight: 600; letter-spacing: .12em; }
+.dsh-studio-project-pane strong { color: var(--studio-ink); font-size: 18px; font-weight: 650; letter-spacing: -.014em; }
+.dsh-studio-project-pane p { color: var(--studio-muted); font-size: 12px; line-height: 1.55; }
+.dsh-studio-pane-actions button { height: 34px; border-radius: 9px; background: var(--studio-blue); color: #fff; }
+.dsh-studio-pane-actions button.secondary { background: var(--studio-fill); color: var(--studio-ink); }
+.dsh-studio-divider::after { background: transparent; }
+.dsh-studio-divider:hover::after { background: rgba(10,132,255,.55); }
+
+.dsh-studio-ai-sidebar {
+  border-left-color: var(--studio-separator);
+  background: rgba(22,22,24,.88);
+  -webkit-backdrop-filter: blur(30px) saturate(170%);
+  backdrop-filter: blur(30px) saturate(170%);
+}
+.dsh-studio-ai-sidebar-head { border-bottom-color: var(--studio-separator); }
+.dsh-studio-ai-sidebar-head .status { background: #30d158; box-shadow: none; }
+.dsh-studio-ai-sidebar-head .title strong { color: var(--studio-ink); font-weight: 610; }
+.dsh-studio-ai-sidebar-head .title span { color: var(--studio-dim); }
+.dsh-studio-ai-modes { background: rgba(255,255,255,.055); }
+.dsh-studio-ai-modes button { color: var(--studio-muted); }
+.dsh-studio-ai-modes button.active { background: rgba(255,255,255,.13); color: var(--studio-ink); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+html[data-dsh-studio-active] [data-dsh-studio-conversation] {
+  border-left-color: var(--studio-separator) !important;
+  background: rgba(22,22,24,.9) !important;
+  transition: opacity 180ms ease, transform 320ms cubic-bezier(.22,1,.36,1) !important;
+}
+
+.dsh-studio-section-head, .dsh-studio-project-row, .dsh-studio-theme-button, .dsh-studio-rail-button,
+.dsh-studio-menu button, .dsh-studio-icon-button, .dsh-studio-folder-button, .dsh-studio-button,
+.dsh-studio-layout-button, .dsh-studio-ai-toggle, .dsh-studio-ai-sidebar-head button,
+.dsh-studio-pane-bar button, .dsh-studio-pane-actions button {
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease, transform 100ms ease-out;
+}
+.dsh-studio-project-row:active, .dsh-studio-theme-button:active, .dsh-studio-rail-button:active,
+.dsh-studio-menu button:active, .dsh-studio-icon-button:active, .dsh-studio-folder-button:active,
+.dsh-studio-button:active, .dsh-studio-layout-button:active, .dsh-studio-ai-toggle:active,
+.dsh-studio-ai-sidebar-head button:active, .dsh-studio-pane-actions button:active { transform: scale(.97); }
+.dsh-studio-project-row:focus-visible, .dsh-studio-theme-button:focus-visible, .dsh-studio-rail-button:focus-visible,
+.dsh-studio-menu button:focus-visible, .dsh-studio-icon-button:focus-visible, .dsh-studio-folder-button:focus-visible,
+.dsh-studio-button:focus-visible, .dsh-studio-layout-button:focus-visible, .dsh-studio-ai-toggle:focus-visible,
+.dsh-studio-ai-sidebar-head button:focus-visible, .dsh-studio-pane-actions button:focus-visible {
+  outline: 2px solid var(--studio-blue);
+  outline-offset: 2px;
+}
+
+html[data-dsh-studio-theme="light"] {
+  --studio-ink: rgba(0,0,0,.88);
+  --studio-muted: rgba(60,60,67,.68);
+  --studio-dim: rgba(60,60,67,.38);
+  --studio-blue: #007aff;
+  --studio-blue-soft: rgba(0,122,255,.12);
+  --studio-orange: #ff9500;
+  --studio-field: #f5f5f7;
+  --studio-panel: rgba(255,255,255,.8);
+  --studio-separator: rgba(60,60,67,.12);
+  --studio-fill: rgba(120,120,128,.1);
+  --studio-fill-hover: rgba(120,120,128,.15);
+}
+html[data-dsh-studio-theme="light"] body, html[data-dsh-studio-theme="light"] .dsh-studio-overlay { background: var(--studio-field) !important; }
+html[data-dsh-studio-theme="light"] [data-dsh-studio-sidebar-root] { background: rgba(246,246,248,.88) !important; border-right-color: var(--studio-separator) !important; }
+html[data-dsh-studio-theme="light"] .dsh-studio-section-head, html[data-dsh-studio-theme="light"] .dsh-studio-project-row { color: var(--studio-muted); }
+html[data-dsh-studio-theme="light"] .dsh-studio-section-head strong, html[data-dsh-studio-theme="light"] .dsh-studio-project-row:hover { color: var(--studio-ink); }
+html[data-dsh-studio-theme="light"] .dsh-studio-section-head:hover, html[data-dsh-studio-theme="light"] .dsh-studio-project-row:hover { background: var(--studio-fill); }
+html[data-dsh-studio-theme="light"] .dsh-studio-project-row.active { background: rgba(0,122,255,.12); color: #065ea8; box-shadow: none; }
+html[data-dsh-studio-theme="light"] .dsh-studio-empty { border: 0; background: rgba(120,120,128,.06); color: var(--studio-dim); }
+html[data-dsh-studio-theme="light"] .dsh-studio-menu, html[data-dsh-studio-theme="light"] .dsh-studio-dialog { border-color: rgba(60,60,67,.14); background: rgba(250,250,252,.9); }
+html[data-dsh-studio-theme="light"] .dsh-studio-field input, html[data-dsh-studio-theme="light"] .dsh-studio-field select,
+html[data-dsh-studio-theme="light"] .dsh-studio-folder-button { border-color: rgba(60,60,67,.13); background: rgba(120,120,128,.08); color: var(--studio-ink); }
+html[data-dsh-studio-theme="light"] .dsh-studio-button { background: var(--studio-fill); color: var(--studio-ink); }
+html[data-dsh-studio-theme="light"] .dsh-studio-button.primary { background: var(--studio-blue); color: #fff; }
+html[data-dsh-studio-theme="light"] .dsh-studio-topbar { border-bottom-color: var(--studio-separator); background: rgba(248,248,250,.78); }
+html[data-dsh-studio-theme="light"] .dsh-studio-topbar h1 { color: var(--studio-ink); }
+html[data-dsh-studio-theme="light"] .dsh-studio-topbar .path, html[data-dsh-studio-theme="light"] .dsh-studio-project-pane .eyebrow { color: var(--studio-dim); }
+html[data-dsh-studio-theme="light"] .dsh-studio-layouts, html[data-dsh-studio-theme="light"] .dsh-studio-ai-modes { background: rgba(120,120,128,.09); }
+html[data-dsh-studio-theme="light"] .dsh-studio-layout-button, html[data-dsh-studio-theme="light"] .dsh-studio-ai-modes button { color: var(--studio-muted); }
+html[data-dsh-studio-theme="light"] .dsh-studio-layout-button.active, html[data-dsh-studio-theme="light"] .dsh-studio-ai-modes button.active { background: rgba(255,255,255,.9); color: var(--studio-ink); box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+html[data-dsh-studio-theme="light"] .dsh-studio-surface { border-color: rgba(60,60,67,.1); background: rgba(255,255,255,.76); box-shadow: 0 16px 44px rgba(0,0,0,.09), 0 1px 0 rgba(255,255,255,.9) inset; }
+html[data-dsh-studio-theme="light"] .dsh-studio-pane, html[data-dsh-studio-theme="light"] .dsh-studio-pane:nth-of-type(even) { background: rgba(255,255,255,.58); }
+html[data-dsh-studio-theme="light"] .dsh-studio-pane-bar { background: rgba(250,250,252,.72); color: var(--studio-dim); }
+html[data-dsh-studio-theme="light"] .dsh-studio-project-pane strong { color: var(--studio-ink); }
+html[data-dsh-studio-theme="light"] .dsh-studio-project-pane p { color: var(--studio-muted); }
+html[data-dsh-studio-theme="light"] .dsh-studio-pane-actions button { background: var(--studio-blue); color: #fff; }
+html[data-dsh-studio-theme="light"] .dsh-studio-pane-actions button.secondary { background: var(--studio-fill); color: var(--studio-ink); }
+html[data-dsh-studio-theme="light"] .dsh-studio-ai-sidebar, html[data-dsh-studio-theme="light"][data-dsh-studio-active] [data-dsh-studio-conversation] { border-left-color: var(--studio-separator) !important; background: rgba(248,248,250,.9) !important; }
+html[data-dsh-studio-theme="light"] .dsh-studio-ai-sidebar-head { border-bottom-color: var(--studio-separator); }
+html[data-dsh-studio-theme="light"] .dsh-studio-ai-sidebar-head .title strong { color: var(--studio-ink); }
+
+@media (prefers-reduced-motion: reduce) {
+  .dsh-studio-stage, html[data-dsh-studio-active] [data-dsh-studio-conversation] { transition: opacity 160ms ease !important; }
+  .dsh-studio-project-row:active, .dsh-studio-theme-button:active, .dsh-studio-rail-button:active,
+  .dsh-studio-menu button:active, .dsh-studio-icon-button:active, .dsh-studio-folder-button:active,
+  .dsh-studio-button:active, .dsh-studio-layout-button:active, .dsh-studio-ai-toggle:active,
+  .dsh-studio-ai-sidebar-head button:active, .dsh-studio-pane-actions button:active { transform: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  [data-dsh-studio-sidebar-root], .dsh-studio-topbar, .dsh-studio-menu, .dsh-studio-dialog,
+  .dsh-studio-surface, .dsh-studio-ai-sidebar, html[data-dsh-studio-active] [data-dsh-studio-conversation] {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+}
+@media (prefers-contrast: more) {
+  .dsh-studio-menu, .dsh-studio-dialog, .dsh-studio-surface, .dsh-studio-ai-sidebar,
+  html[data-dsh-studio-active] [data-dsh-studio-conversation] { border-color: currentColor !important; }
+}
+
 @media (max-width: 1050px) {
   .dsh-studio-stage.ai-open { padding-right: 322px; }
   .dsh-studio-ai-sidebar { width: 304px; }
   html[data-dsh-studio-active] [data-dsh-studio-conversation] { width: 304px !important; min-width: 280px !important; }
 }
+
+/* Unified plugin-owned sidebar shell. DSH's native workspace browser remains mounted as a child slot. */
+.dsh-studio-shell {
+  width: 100%; height: 100%; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
+  box-sizing: border-box; padding: 8px 8px 10px; color: var(--studio-ink);
+  background: rgba(22,22,24,.92); border-right: 1px solid var(--studio-separator);
+  font: 13px/18px -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  -webkit-backdrop-filter: blur(28px) saturate(160%); backdrop-filter: blur(28px) saturate(160%);
+}
+.dsh-studio-shell.rail { width: 56px; padding-inline: 10px; align-items: center; }
+.dsh-studio-shell-head { width: 100%; height: 44px; display: flex; align-items: center; gap: 8px; }
+.dsh-studio-brand { min-width: 0; flex: 1; display: flex; align-items: center; gap: 9px; border: 0; padding: 4px 2px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.dsh-studio-brand-image, .dsh-studio-brand-fallback { flex: none; display: grid; place-items: center; overflow: hidden; border-radius: 7px; object-fit: contain; color: var(--studio-blue); }
+.dsh-studio-brand-copy { min-width: 0; display: grid; gap: 0; }
+.dsh-studio-brand-copy strong, .dsh-studio-brand-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-studio-brand-copy strong { color: var(--studio-ink); font-size: 12px; line-height: 16px; font-weight: 650; letter-spacing: -.01em; }
+.dsh-studio-brand-copy small { color: var(--studio-dim); font-size: 9px; line-height: 12px; }
+.dsh-studio-shell-icon, .dsh-studio-new-session, .dsh-studio-theme-button { border: 0; background: transparent; color: var(--studio-muted); cursor: pointer; }
+.dsh-studio-shell-icon { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 9px; }
+.dsh-studio-shell-icon:hover { background: var(--studio-fill); color: var(--studio-ink); }
+.dsh-studio-new-session { width: 100%; min-height: 36px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--studio-separator); border-radius: 10px; margin: 2px 0 10px; background: var(--studio-fill); color: var(--studio-ink); font: inherit; font-weight: 560; }
+.dsh-studio-new-session:hover { background: var(--studio-fill-hover); }
+.dsh-studio-shell.rail .dsh-studio-new-session { width: 36px; height: 36px; padding: 0; border-radius: 10px; }
+.dsh-studio-navigation { width: 100%; min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.dsh-studio-native-workspaces { min-height: 116px; max-height: 56%; flex: 0 1 56%; display: flex; overflow: hidden; }
+.dsh-studio-native-workspaces > * { min-width: 0; flex: 1; }
+.dsh-studio-project-list { flex: none; max-height: 42%; display: grid; gap: 2px; overflow: auto; padding: 7px 0 6px; border-top: 1px solid var(--studio-separator); }
+.dsh-studio-shell.rail .dsh-studio-project-list { width: 36px; max-height: 40%; justify-items: center; border-top: 0; }
+.dsh-studio-project-row { width: 100%; min-height: 36px; display: grid; grid-template-columns: 20px minmax(0,1fr) auto 12px; align-items: center; gap: 7px; border: 0; border-radius: 9px; padding: 0 7px; background: transparent; color: var(--studio-muted); font: inherit; text-align: left; cursor: pointer; }
+.dsh-studio-shell.rail .dsh-studio-project-row { width: 36px; grid-template-columns: 1fr; place-items: center; padding: 0; }
+.dsh-studio-project-icon { display: grid; place-items: center; color: currentColor; }
+.dsh-studio-project-chevron { opacity: 0; color: var(--studio-dim); transition: opacity 120ms ease, transform 180ms cubic-bezier(.2,.8,.2,1); }
+.dsh-studio-project-row:hover .dsh-studio-project-chevron { opacity: 1; transform: translateX(1px); }
+.dsh-studio-project-row.active { background: var(--studio-blue-soft); color: #70b7ff; }
+.dsh-studio-project-empty { min-height: 36px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: 9px; background: transparent; color: var(--studio-dim); font: 11px/16px inherit; cursor: pointer; }
+.dsh-studio-project-empty:hover { background: var(--studio-fill); color: var(--studio-muted); }
+.dsh-studio-shell-foot { width: 100%; flex: none; display: grid; gap: 2px; padding-top: 7px; border-top: 1px solid var(--studio-separator); }
+.dsh-studio-theme-button { width: 100%; min-height: 34px; display: flex; align-items: center; gap: 9px; border-radius: 9px; padding: 0 8px; font: inherit; }
+.dsh-studio-shell.rail .dsh-studio-theme-button { width: 36px; padding: 0; justify-content: center; }
+.dsh-studio-native-settings > button { width: 100% !important; min-height: 34px !important; border-radius: 9px !important; }
+.dsh-studio-brand-preview { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--studio-separator); border-radius: 14px; background: var(--studio-fill); }
+.dsh-studio-brand-preview > div { min-width: 0; display: grid; gap: 2px; }
+.dsh-studio-brand-preview strong { color: var(--studio-ink); font-size: 15px; }
+.dsh-studio-brand-preview span { color: var(--studio-muted); font-size: 11px; }
+.dsh-studio-dialog-spacer { flex: 1; }
+.dsh-studio-section-picker { display: grid; grid-template-columns:minmax(0,1fr) 32px; gap: 7px; align-items: center; }
+.dsh-studio-field-note { color: var(--studio-dim); font-size: 10px; line-height: 15px; }
+
+/* Codex-like reading rhythm: full-width assistant prose, compact user bubble, quiet composer card. */
+[data-conversation-scroll] { --dsh-chat-content-width: 720px; --dsh-composer-card-max-width: 752px; --dsh-composer-side-clearance: 22px; }
+[data-conversation-scroll] [data-composer-card] { min-height: 92px; border-radius: 18px; padding-top: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.14); }
+[data-conversation-scroll] [data-input-mirror] { min-height: 42px; font-size: 14px; line-height: 22px; }
+
+/* AI is a floating companion surface with the same 16px corner system as the canvas. */
+.dsh-studio-ai-sidebar { top: 72px; right: 14px; bottom: 14px; height: auto; width: 372px; overflow: hidden; border: 1px solid var(--studio-separator); border-radius: 16px; box-shadow: 0 18px 50px rgba(0,0,0,.24); }
+html[data-dsh-studio-active] [data-dsh-studio-conversation] { top: 72px !important; right: 14px !important; bottom: 14px !important; height: auto !important; overflow: hidden !important; border: 1px solid var(--studio-separator) !important; border-radius: 16px !important; box-shadow: 0 18px 50px rgba(0,0,0,.24) !important; }
+.dsh-studio-stage.ai-open { padding-right: 400px; }
+
+html[data-dsh-studio-theme="light"] .dsh-studio-shell { background: rgba(246,246,248,.9); border-right-color: var(--studio-separator); }
+html[data-dsh-studio-theme="light"] .dsh-studio-project-row.active { background: var(--studio-blue-soft); color: #0068bd; }
+html[data-dsh-studio-theme="light"] .dsh-studio-brand-fallback { color: #007aff; }
+
+@media (max-width: 1050px) {
+  .dsh-studio-ai-sidebar { width: 304px; }
+  .dsh-studio-stage.ai-open { padding-right: 332px; }
+}
 `
 
-function findSidebarRoot(node: HTMLElement): HTMLElement | null {
-  let current: HTMLElement | null = node
-  while (current !== null) {
-    const rect = current.getBoundingClientRect()
-    if (rect.height > window.innerHeight * .8 && rect.width > 48 && rect.width < 420) return current
-    current = current.parentElement
+function StudioMark({ size = 24, className }: { size?: number; className?: string }) {
+  const { brand } = useStudio()
+  if (brand.logo !== '') {
+    return <img className={`dsh-studio-brand-image${className ? ` ${className}` : ''}`} src={brand.logo} width={size} height={size} alt="" />
   }
-  return null
+  return (
+    <span className={`dsh-studio-brand-fallback${className ? ` ${className}` : ''}`} style={{ width: size, height: size }} aria-hidden="true">
+      <IconSparkle16 size={Math.max(16, size - 4)} />
+    </span>
+  )
+}
+
+function SidebarBrandName() {
+  const { brand } = useStudio()
+  return <span className="dsh-studio-brand-copy"><strong>{brand.name}</strong><small>{brand.tagline}</small></span>
+}
+
+function HeroBrandMark({ size = 34, className }: { size?: number; className?: string }) {
+  const { brand } = useStudio()
+  const ref = useRef<HTMLSpanElement>(null)
+  useLayoutEffect(() => {
+    const slot = ref.current?.closest('[data-slot="conversation.hero.brand.mark"]')
+    const markSeat = slot?.parentElement
+    const title = markSeat?.nextElementSibling
+    const badge = title?.nextElementSibling
+    if (!(title instanceof HTMLElement) || !(badge instanceof HTMLElement)) return
+    const previousTitle = title.textContent
+    const previousBadge = badge.textContent
+    title.textContent = brand.name
+    badge.textContent = brand.tagline
+    return () => {
+      title.textContent = previousTitle
+      badge.textContent = previousBadge
+    }
+  }, [brand.name, brand.tagline])
+  return <span ref={ref}><StudioMark size={size} className={className} /></span>
+}
+
+function BrandDialog({ onClose }: { onClose: () => void }) {
+  const current = useStudio().brand
+  const [name, setName] = useState(current.name)
+  const [tagline, setTagline] = useState(current.tagline)
+  const [logo, setLogo] = useState(current.logo)
+  const upload = (file?: File) => {
+    if (file === undefined) return
+    if (!file.type.startsWith('image/')) return
+    const reader = new FileReader()
+    reader.onload = () => { if (typeof reader.result === 'string') setLogo(reader.result) }
+    reader.readAsDataURL(file)
+  }
+  return createPortal(
+    <div className="dsh-studio-dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+      <div className="dsh-studio-dialog dsh-studio-brand-dialog" role="dialog" aria-modal="true" aria-label="品牌与 Logo">
+        <div className="dsh-studio-dialog-head"><h2>品牌与 Logo</h2><button className="dsh-studio-icon-button" type="button" aria-label="关闭" onClick={onClose}><IconCloseOutline16 /></button></div>
+        <div className="dsh-studio-brand-preview"><StudioMark size={42} /><div><strong>{name || '未命名工作台'}</strong><span>{tagline || '个人智能工作空间'}</span></div></div>
+        <div className="dsh-studio-field"><label htmlFor="studio-brand-name">主界面名称</label><input id="studio-brand-name" value={name} onChange={event => { setName(event.target.value) }} placeholder="例如：玄木工作台" /></div>
+        <div className="dsh-studio-field"><label htmlFor="studio-brand-tagline">标识文字</label><input id="studio-brand-tagline" value={tagline} onChange={event => { setTagline(event.target.value) }} placeholder="例如：个人智能工作空间" /></div>
+        <div className="dsh-studio-field"><label htmlFor="studio-brand-logo">Logo 图片</label><input id="studio-brand-logo" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={event => { upload(event.target.files?.[0]) }} /></div>
+        <div className="dsh-studio-dialog-actions">
+          {logo !== '' && <button className="dsh-studio-button" type="button" onClick={() => { setLogo('') }}>恢复默认图标</button>}
+          <span className="dsh-studio-dialog-spacer" />
+          <button className="dsh-studio-button" type="button" onClick={onClose}>取消</button>
+          <button className="dsh-studio-button primary" type="button" disabled={name.trim() === ''} onClick={() => { studio.setBrand({ name: name.trim(), tagline: tagline.trim(), logo }); onClose() }}>保存</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
 }
 
 function ProjectDialog({
@@ -677,6 +1078,10 @@ function ProjectDialog({
   const [workspaces, setWorkspaces] = useState(listWorkspaces)
   const [workspaceId, setWorkspaceId] = useState(project?.workspaceId ?? workspaces[0]?.id ?? '')
   const [folderName, setFolderName] = useState('')
+  const [sectionWorkspaceIds, setSectionWorkspaceIds] = useState<string[]>(project?.sections.map(section => section.workspaceId) ?? [])
+  const [launch, setLaunch] = useState<ProjectLaunch>(project?.launch ?? 'workspace')
+  const [dataKind, setDataKind] = useState<DataConnection['kind']>(project?.data.kind ?? 'project-files')
+  const [dataLocation, setDataLocation] = useState(project?.data.location ?? '')
   const [saving, setSaving] = useState(false)
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState('')
@@ -723,6 +1128,17 @@ function ProjectDialog({
         workspaceId: project === undefined ? binding.id : project.workspaceId,
         path: project === undefined ? binding.path : project.path,
         panes: panesFor(layout, project?.panes ?? ['overview']),
+        paneSources: project?.paneSources ?? [],
+        sections: (() => {
+          const ids = Array.from(new Set([binding.id, ...sectionWorkspaceIds].filter(Boolean)))
+          return ids.map((id, index) => {
+            if (id === binding.id) return { id: project?.sections.find(section => section.workspaceId === id)?.id ?? projectId(), name: index === 0 ? '主项目' : binding.title, workspaceId: id, path: binding.path }
+            const workspace = workspaces.find(item => item.id === id)!
+            return { id: project?.sections.find(section => section.workspaceId === id)?.id ?? projectId(), name: workspace.title, workspaceId: id, path: workspace.path }
+          })
+        })(),
+        launch,
+        data: { kind: dataKind, location: dataLocation.trim(), readOnly: true },
         aiMode: project?.aiMode ?? (kind === 'generated' ? 'build' : 'analyze'),
         sessions: project?.sessions ?? {},
       }
@@ -734,7 +1150,7 @@ function ProjectDialog({
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally { setSaving(false) }
   }
-  return (
+  return createPortal(
     <div className="dsh-studio-dialog-backdrop" onMouseDown={event => {
       if (event.target === event.currentTarget) onClose()
     }}>
@@ -773,6 +1189,36 @@ function ProjectDialog({
           </div>
         )}
         {project !== undefined && <div className="dsh-studio-project-binding"><span>工作区连接</span><strong>已连接到 DSH 工作区</strong></div>}
+        <div className="dsh-studio-field">
+          <label htmlFor="studio-project-launch">点击项目时启动</label>
+          <select id="studio-project-launch" value={launch} onChange={event => { setLaunch(event.target.value as ProjectLaunch) }}>
+            <option value="workspace">DSH 项目工作区</option>
+            <option value="web">网页项目</option>
+            <option value="worktable">工作台项目</option>
+          </select>
+        </div>
+        <div className="dsh-studio-field">
+          <label>挂载到分区的 DSH 项目</label>
+          {sectionWorkspaceIds.map((id, index) => (
+            <div className="dsh-studio-section-picker" key={`${id}-${index}`}>
+              <select value={id} onChange={event => { setSectionWorkspaceIds(items => items.map((item, itemIndex) => itemIndex === index ? event.target.value : item)) }}>
+                {workspaces.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
+              </select>
+              <button className="dsh-studio-icon-button" type="button" aria-label="移除分区" onClick={() => { setSectionWorkspaceIds(items => items.filter((_, itemIndex) => itemIndex !== index)) }}><IconCloseOutline16 size={13} /></button>
+            </div>
+          ))}
+          <button className="dsh-studio-folder-button" type="button" disabled={workspaces.length === 0} onClick={() => { setSectionWorkspaceIds(items => [...items, workspaces[0]!.id]) }}><IconPlusOutline16 size={14} />添加项目分区</button>
+        </div>
+        <div className="dsh-studio-field">
+          <label htmlFor="studio-project-data">AI 数据接口</label>
+          <select id="studio-project-data" value={dataKind} onChange={event => { setDataKind(event.target.value as DataConnection['kind']) }}>
+            <option value="project-files">项目文件与产物（默认）</option>
+            <option value="sqlite">SQLite 数据库</option>
+            <option value="http">HTTP 数据接口</option>
+          </select>
+          {dataKind !== 'project-files' && <input value={dataLocation} onChange={event => { setDataLocation(event.target.value) }} placeholder={dataKind === 'sqlite' ? '数据库相对路径，例如 data/app.db' : '接口地址，例如 http://127.0.0.1:4000/api'} />}
+          <small className="dsh-studio-field-note">AI 默认只读访问；凭据不会保存在这个插件中。</small>
+        </div>
         {error !== '' && <div className="dsh-studio-dialog-error">{error}</div>}
         <div className="dsh-studio-field">
           <label htmlFor="studio-project-layout">初始视图</label>
@@ -788,56 +1234,24 @@ function ProjectDialog({
           <button className="dsh-studio-button primary" type="button" disabled={saving || picking || name.trim() === '' || workspaceId === ''} onClick={() => { void save() }}>{saving ? '正在连接…' : '保存项目'}</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
-function SidebarSection({ wide }: { wide: boolean }) {
+function PersonalSidebar(props: any) {
+  const { collapsed, width, renderSlot, startSession, toggleSidebar } = props
   const state = useStudio()
-  const [open, setOpen] = useState(false)
-  const [menu, setMenu] = useState<{ x: number; y: number; project?: Project } | null>(null)
+  const wide = !collapsed
+  const [menu, setMenu] = useState<{ x: number; y: number; project?: Project; brand?: boolean } | null>(null)
   const [editing, setEditing] = useState<Project | undefined | false>(false)
-  const rootRef = useRef<HTMLDivElement>(null)
-
-  useLayoutEffect(() => {
-    const node = rootRef.current
-    if (node === null) return
-    const sidebarRoot = findSidebarRoot(node)
-    if (sidebarRoot === null) return
-    sidebarRoot.setAttribute('data-dsh-studio-sidebar-root', '')
-    const nativeRegion = sidebarRoot.children.item(sidebarRoot.children.length - 2) as HTMLElement | null
-    const footArea = sidebarRoot.lastElementChild as HTMLElement | null
-    const footerActions = footArea?.firstElementChild as HTMLElement | null
-    nativeRegion?.setAttribute('data-dsh-studio-native-region', '')
-    footArea?.setAttribute('data-dsh-studio-foot-area', '')
-    footerActions?.setAttribute('data-dsh-studio-footer-actions', '')
-    const onWorkspace = (event: MouseEvent) => {
-      if (studio.getSnapshot().activeId === null || nativeRegion === null) return
-      const rect = nativeRegion.getBoundingClientRect()
-      if (event.clientY <= rect.top + 46) {
-        studio.setActive(null)
-        setOpen(false)
-      }
-    }
-    nativeRegion?.addEventListener('click', onWorkspace, true)
-    return () => {
-      nativeRegion?.removeEventListener('click', onWorkspace, true)
-      nativeRegion?.removeAttribute('data-dsh-studio-native-region')
-      footArea?.removeAttribute('data-dsh-studio-foot-area')
-      footerActions?.removeAttribute('data-dsh-studio-footer-actions')
-      sidebarRoot.removeAttribute('data-dsh-studio-sidebar-root')
-    }
-  }, [wide])
+  const [editingBrand, setEditingBrand] = useState(false)
 
   useEffect(() => {
-    if (state.activeId !== null) setOpen(true)
     document.documentElement.toggleAttribute('data-dsh-studio-active', state.activeId !== null)
-    return () => { document.documentElement.removeAttribute('data-dsh-studio-active') }
-  }, [state.activeId])
-
-  useEffect(() => {
     document.documentElement.setAttribute('data-dsh-studio-theme', state.theme)
-  }, [state.theme])
+    return () => { document.documentElement.removeAttribute('data-dsh-studio-active') }
+  }, [state.activeId, state.theme])
 
   useEffect(() => {
     if (menu === null) return
@@ -846,128 +1260,57 @@ function SidebarSection({ wide }: { wide: boolean }) {
     return () => { window.removeEventListener('pointerdown', close) }
   }, [menu])
 
-  if (!wide) {
-    return (
-      <div ref={rootRef} className="dsh-studio-sidebar" data-dsh-personal-studio-sidebar="">
-        <button className="dsh-studio-rail-button" type="button" aria-label="我的项目" onClick={() => {
-          setOpen(true)
-          const sidebarRoot = rootRef.current === null ? null : findSidebarRoot(rootRef.current)
-          sidebarRoot?.querySelector<HTMLButtonElement>('button')?.click()
-        }}>
-          <IconFolderClose16 size={18} />
-        </button>
-      </div>
-    )
-  }
-
-  const showContext = (event: React.MouseEvent, project?: Project) => {
+  const showContext = (event: React.MouseEvent, project?: Project, brand = false) => {
     event.preventDefault()
     event.stopPropagation()
-    setMenu({ x: event.clientX, y: event.clientY, project })
+    setMenu({ x: event.clientX, y: event.clientY, project, brand })
+  }
+  const openProject = (project: Project) => {
+    studio.setActive(project.id)
+    void openProjectMode(project, project.aiMode)
   }
 
   return (
-    <div ref={rootRef} className="dsh-studio-sidebar" data-dsh-personal-studio-sidebar="">
-      <div className="dsh-studio-section-head" onContextMenu={event => { showContext(event) }} onClick={() => { setOpen(value => !value) }}>
-        {open ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}
-        <IconFolderClose16 size={15} />
-        <strong>我的项目</strong>
-        <span className="hint">右键新建</span>
-        <button
-          className="dsh-studio-theme-button"
-          type="button"
-          aria-label={state.theme === 'dark' ? '切换为浅色界面' : '切换为深色界面'}
-          title={state.theme === 'dark' ? '浅色界面' : '深色界面'}
-          onClick={event => {
-            event.stopPropagation()
-            setTheme(state.theme === 'dark' ? 'light' : 'dark')
-          }}
-          onContextMenu={event => { event.stopPropagation() }}
-        >
-          {state.theme === 'dark' ? <IconLightOutline16 size={15} /> : <IconDarkOutline16 size={15} />}
+    <aside
+      className={`dsh-studio-shell${wide ? ' wide' : ' rail'}`}
+      data-dsh-studio-sidebar-root=""
+      style={wide ? { width } : undefined}
+      onContextMenu={event => { if (event.target === event.currentTarget) showContext(event) }}
+    >
+      <header className="dsh-studio-shell-head">
+        <button className="dsh-studio-brand" type="button" aria-label={wide ? '品牌设置' : '展开侧边栏'} onContextMenu={event => { showContext(event, undefined, true) }} onClick={() => { if (!wide) toggleSidebar(); else setEditingBrand(true) }}>
+          <StudioMark size={wide ? 26 : 24} />
+          {wide && <SidebarBrandName />}
         </button>
-      </div>
-      {open && (
-        <div className="dsh-studio-projects">
-          {state.projects.length === 0 && <div className="dsh-studio-empty">这里暂时是空的<br />在“我的项目”上右键新建</div>}
+        {wide && <button className="dsh-studio-shell-icon" type="button" aria-label="收起侧边栏" onClick={toggleSidebar}><IconPanelLeftOutline16 size={16} /></button>}
+      </header>
+      <button className="dsh-studio-new-session" type="button" aria-label="新建会话" onClick={() => { studio.setActive(null); startSession() }}><IconPlusOutline16 size={wide ? 14 : 18} />{wide && <span>新建会话</span>}</button>
+      <div className="dsh-studio-navigation" onContextMenu={event => { if ((event.target as HTMLElement).closest('button') === null) showContext(event) }}>
+        <div className="dsh-studio-native-workspaces">{renderSlot('sidebar.workspaces', { wide, expandSidebar: () => { if (!wide) toggleSidebar() } })}</div>
+        <div className="dsh-studio-project-list" role="tree" aria-label="项目">
           {state.projects.map(project => (
-            <button
-              key={project.id}
-              type="button"
-              className={`dsh-studio-project-row${state.activeId === project.id ? ' active' : ''}`}
-              onClick={() => { studio.setActive(project.id); void openProjectMode(project, project.aiMode) }}
-              onContextMenu={event => { showContext(event, project) }}
-            >
-              <IconSparkle16 size={14} />
-              <span>{project.name}</span>
-              <small>{project.layout}</small>
+            <button key={project.id} type="button" role="treeitem" className={`dsh-studio-project-row${state.activeId === project.id ? ' active' : ''}`} onClick={() => { openProject(project) }} onContextMenu={event => { showContext(event, project) }}>
+              <span className="dsh-studio-project-icon"><IconSparkle16 size={wide ? 14 : 18} /></span>
+              {wide && <><span>{project.name}</span>{project.sections.length > 1 && <small>{project.sections.length}</small>}<IconChevronRightOutline14 className="dsh-studio-project-chevron" size={12} /></>}
             </button>
           ))}
+          {wide && state.projects.length === 0 && <button className="dsh-studio-project-empty" type="button" onClick={() => { setEditing(undefined) }}><IconPlusOutline16 size={13} />右键或点击添加项目</button>}
         </div>
-      )}
-      {menu !== null && (
-        <div className="dsh-studio-menu" style={{ left: menu.x, top: menu.y }} onPointerDown={event => { event.stopPropagation() }}>
-          {menu.project === undefined ? (
-            <button type="button" onClick={() => { setMenu(null); setEditing(undefined) }}><IconPlusOutline16 />新建项目</button>
-          ) : (
-            <>
-              <button type="button" onClick={() => { setMenu(null); setEditing(menu.project) }}><IconEditOutline16 />编辑项目</button>
-              <button className="danger" type="button" onClick={() => { studio.remove(menu.project!.id); setMenu(null) }}><IconTrashOutline16 />删除项目</button>
-            </>
-          )}
-        </div>
-      )}
+      </div>
+      <footer className="dsh-studio-shell-foot">
+        <button className="dsh-studio-theme-button" type="button" aria-label={state.theme === 'dark' ? '切换为浅色界面' : '切换为深色界面'} onClick={() => { setTheme(state.theme === 'dark' ? 'light' : 'dark') }}>{state.theme === 'dark' ? <IconLightOutline16 size={16} /> : <IconDarkOutline16 size={16} />}{wide && <span>{state.theme === 'dark' ? '浅色外观' : '深色外观'}</span>}</button>
+        <div className="dsh-studio-native-settings">{renderSlot('sidebar.settings', { wide })}</div>
+        {renderSlot('sidebar.footer.action', { wide })}
+      </footer>
+      {menu !== null && createPortal(<div className="dsh-studio-menu" style={{ left: menu.x, top: menu.y }} onPointerDown={event => { event.stopPropagation() }}>
+        {menu.brand ? <button type="button" onClick={() => { setMenu(null); setEditingBrand(true) }}><IconEditOutline16 />修改品牌与 Logo</button>
+          : menu.project === undefined ? <button type="button" onClick={() => { setMenu(null); setEditing(undefined) }}><IconPlusOutline16 />新建项目</button>
+            : <><button type="button" onClick={() => { setMenu(null); setEditing(menu.project) }}><IconEditOutline16 />编辑项目</button><button className="danger" type="button" onClick={() => { studio.remove(menu.project!.id); setMenu(null) }}><IconTrashOutline16 />删除项目</button></>}
+      </div>, document.body)}
       {editing !== false && <ProjectDialog project={editing} onClose={() => { setEditing(false) }} />}
-    </div>
+      {editingBrand && <BrandDialog onClose={() => { setEditingBrand(false) }} />}
+    </aside>
   )
-}
-
-function KineticGrid({ theme }: { theme: Theme }) {
-  const ref = useRef<HTMLCanvasElement>(null)
-  useEffect(() => {
-    const canvas = ref.current
-    if (canvas === null) return
-    const context = canvas.getContext('2d')
-    if (context === null) return
-    let frame = 0
-    let raf = 0
-    const draw = () => {
-      const scale = Math.min(window.devicePixelRatio || 1, 2)
-      const width = canvas.clientWidth
-      const height = canvas.clientHeight
-      if (canvas.width !== width * scale || canvas.height !== height * scale) {
-        canvas.width = width * scale
-        canvas.height = height * scale
-      }
-      context.setTransform(scale, 0, 0, scale, 0, 0)
-      context.clearRect(0, 0, width, height)
-      context.lineWidth = 1
-      const drift = Math.sin(frame / 180) * 14
-      for (let x = -80; x < width + 120; x += 48) {
-        context.beginPath()
-        context.moveTo(x, 0)
-        context.bezierCurveTo(x + 12 + drift, height * .28, x - 22 - drift, height * .72, x + 8, height)
-        context.strokeStyle = theme === 'light'
-          ? (x % 192 === 0 ? 'rgba(35,117,176,.11)' : 'rgba(52,105,143,.045)')
-          : (x % 192 === 0 ? 'rgba(53,151,226,.13)' : 'rgba(45,118,174,.055)')
-        context.stroke()
-      }
-      for (let y = 10; y < height + 60; y += 48) {
-        context.beginPath()
-        context.moveTo(0, y)
-        context.bezierCurveTo(width * .3, y - 10 - drift, width * .72, y + 18 + drift, width, y - 4)
-        context.strokeStyle = theme === 'light'
-          ? (y % 192 === 10 ? 'rgba(35,117,176,.1)' : 'rgba(52,105,143,.04)')
-          : (y % 192 === 10 ? 'rgba(53,151,226,.12)' : 'rgba(45,118,174,.05)')
-        context.stroke()
-      }
-      frame += 1
-      raf = requestAnimationFrame(draw)
-    }
-    draw()
-    return () => { cancelAnimationFrame(raf) }
-  }, [theme])
-  return <canvas ref={ref} className="dsh-studio-grid" aria-hidden="true" />
 }
 
 const paneLabels: Record<PaneKind, { title: string; description: string }> = {
@@ -979,16 +1322,23 @@ const paneLabels: Record<PaneKind, { title: string; description: string }> = {
 
 function Pane({ project, index, onMode }: { project: Project; index: number; onMode: (mode: AiMode, prompt?: string) => void }) {
   const kind = project.panes[index] ?? 'overview'
+  const section = project.sections.find(item => item.id === project.paneSources[index]) ?? project.sections[index] ?? project.sections[0]
   const setKind = (nextKind: PaneKind) => {
     const panes = panesFor(project.layout, project.panes)
     panes[index] = nextKind
     studio.update({ ...project, panes })
   }
+  const setSection = (sectionId: string) => {
+    const paneSources = [...project.paneSources]
+    paneSources[index] = sectionId
+    studio.update({ ...project, paneSources })
+  }
   const details = paneLabels[kind]
   return (
     <section className="dsh-studio-pane">
       <div className="dsh-studio-pane-bar">
-        <span>区域 {index + 1}</span>
+        <span>{section?.name ?? `区域 ${index + 1}`}</span>
+        {project.sections.length > 1 && <select aria-label={`区域 ${index + 1} 项目来源`} value={section?.id} onChange={event => { setSection(event.target.value) }}>{project.sections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
         <select aria-label={`区域 ${index + 1} 内容`} value={kind} onChange={event => { setKind(event.target.value as PaneKind) }}>
           {Object.entries(paneLabels).map(([value, label]) => <option key={value} value={value}>{label.title}</option>)}
         </select>
@@ -997,7 +1347,7 @@ function Pane({ project, index, onMode }: { project: Project; index: number; onM
         <span className="glyph"><IconSparkle16 size={18} /></span>
         <div className="eyebrow">{project.kind === 'generated' ? 'AI 生成项目' : '本地项目'}</div>
         <strong>{details.title}</strong>
-        <p>{details.description}</p>
+        <p>{details.description}{section !== undefined ? `，数据范围为“${section.name}”` : ''}。</p>
         <div className="dsh-studio-pane-actions">
           <button type="button" onClick={() => { onMode('analyze', kind === 'report' ? '请基于当前项目已有数据和产物形成一份总结报告。' : '请读取当前项目，先给我一份结构、现状和关键数据的分析。') }}>交给 AI 分析</button>
           <button type="button" className="secondary" onClick={() => { onMode('build') }}>{project.kind === 'generated' ? '开始生成项目' : '修改这个项目'}</button>
@@ -1108,12 +1458,11 @@ function StudioOverlay() {
   return (
     <>
       <main className="dsh-studio-overlay" style={{ left: sidebarRight }}>
-        <KineticGrid theme={state.theme} />
         <header className="dsh-studio-topbar">
           <span className="project-mark"><IconSparkle16 size={15} /></span>
           <div>
             <h1>{project.name}</h1>
-            <span className="path">{project.kind === 'generated' ? 'AI 创建项目' : '本地项目'}</span>
+            <span className="path">{project.launch === 'web' ? '网页项目' : project.launch === 'worktable' ? '工作台项目' : project.kind === 'generated' ? 'AI 创建项目' : 'DSH 项目'}</span>
           </div>
           <div className="dsh-studio-topbar-actions">
             {project.aiMode === 'build' && <div className="dsh-studio-layouts" aria-label="项目布局">
@@ -1148,7 +1497,7 @@ function StudioOverlay() {
   )
 }
 
-export const inject = ['slots', 'theme', 'sessions', 'conversation', 'workspaces', 'uiWorkspace']
+export const inject = ['slots', 'theme', 'sessions', 'conversation', 'workspaces', 'uiWorkspace', 'layout']
 
 export function apply(ctx: any): void {
   dshBridge = { sessions: ctx.sessions, conversation: ctx.conversation, workspaces: ctx.workspaces, uiWorkspace: ctx.uiWorkspace }
@@ -1172,11 +1521,25 @@ export function apply(ctx: any): void {
     }
   }, 'dsh-personal-studio: styles')
 
-  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
-    name: 'sidebar.footer.action',
-    id: 'dsh-personal-studio-sidebar',
-    order: 20,
-  }, SidebarSection), 'dsh-personal-studio: sidebar')
+  ctx.slots.inject('sidebar', () => ctx.slots.register({
+    name: 'sidebar',
+    priority: -10,
+    children: {
+      'sidebar.brand.mark': { kind: 'single', scope: 'root' },
+      'sidebar.brand.name': { kind: 'single', scope: 'root' },
+      'sidebar.workspaces': { kind: 'single', scope: 'root' },
+      'sidebar.settings': { kind: 'single', scope: 'root' },
+      'sidebar.footer.action': { kind: 'list', scope: 'root' },
+    },
+    inject: () => ({
+      startSession: (workspaceId?: string) => { ctx.uiWorkspace.startSession(workspaceId) },
+      toggleSidebar: () => { ctx.layout.toggleSidebar() },
+    }),
+  }, PersonalSidebar), 'dsh-personal-studio: sidebar shell')
+
+  ctx.slots.inject('sidebar.brand.mark', () => ctx.slots.register({ name: 'sidebar.brand.mark', priority: -10 }, StudioMark), 'dsh-personal-studio: sidebar brand mark')
+  ctx.slots.inject('sidebar.brand.name', () => ctx.slots.register({ name: 'sidebar.brand.name', priority: -10 }, SidebarBrandName), 'dsh-personal-studio: sidebar brand name')
+  ctx.slots.inject('conversation.hero.brand.mark', () => ctx.slots.register({ name: 'conversation.hero.brand.mark', priority: -10 }, HeroBrandMark), 'dsh-personal-studio: hero brand mark')
 
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',
