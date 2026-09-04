@@ -127,7 +127,7 @@ function panesFor(layout: Layout, panes: PaneKind[]): PaneKind[] {
   return Array.from({ length: count }, (_, index) => panes[index] ?? defaults[index] ?? 'report')
 }
 
-let dshBridge: { sessions: any; conversation: any; workspaces: any } | null = null
+let dshBridge: { sessions: any; conversation: any; workspaces: any; uiWorkspace: any } | null = null
 
 function listWorkspaces(): { id: string; title: string; path: string }[] {
   try {
@@ -386,6 +386,9 @@ html[data-dsh-studio-active] [data-dsh-studio-footer-actions] {
   font: inherit;
 }
 .dsh-studio-field input:focus, .dsh-studio-field select:focus { border-color: #4ba8ff; box-shadow: 0 0 0 3px rgba(75,168,255,.1); }
+.dsh-studio-folder-button { height: 36px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid rgba(101,153,193,.14); border-radius: 9px; background: rgba(77,137,183,.08); color: #94acc0; font: inherit; font-size: 11px; cursor: pointer; }
+.dsh-studio-folder-button:hover { border-color: rgba(75,168,255,.3); background: rgba(75,168,255,.11); color: #c8e2f6; }
+.dsh-studio-folder-button:disabled { opacity: .45; cursor: default; }
 .dsh-studio-dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 20px; }
 .dsh-studio-button { height: 36px; padding: 0 15px; border: 0; border-radius: 10px; background: rgba(91,145,185,.12); color: #bbcede; cursor: pointer; }
 .dsh-studio-button.primary { background: var(--studio-orange); color: #1d0e04; font-weight: 650; }
@@ -422,20 +425,23 @@ html[data-dsh-studio-active] [data-dsh-studio-footer-actions] {
 .dsh-studio-topbar .project-mark { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; background: rgba(75,168,255,.12); color: #65b6ff; }
 .dsh-studio-topbar h1 { margin: 0; font-size: 14px; font-weight: 590; letter-spacing: .01em; }
 .dsh-studio-topbar .path { color: #536b81; font-size: 10px; }
-.dsh-studio-layouts { margin-left: auto; display: flex; gap: 4px; padding-right: 426px; transition: padding 220ms ease; }
-.dsh-studio-layouts.chat-minimized { padding-right: 50px; }
+.dsh-studio-topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+.dsh-studio-layouts { display: flex; gap: 4px; }
 .dsh-studio-layout-button { height: 28px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: #647a8e; font-size: 10px; cursor: pointer; }
 .dsh-studio-layout-button:hover { background: rgba(74,143,196,.09); color: #aac2d7; }
 .dsh-studio-layout-button.active { background: rgba(75,168,255,.14); color: #76bdff; }
+.dsh-studio-ai-toggle { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: #71879b; cursor: pointer; }
+.dsh-studio-ai-toggle svg { transform: scaleX(-1); }
+.dsh-studio-ai-toggle:hover, .dsh-studio-ai-toggle.active { background: rgba(75,168,255,.12); color: #7dc3ff; }
 
 .dsh-studio-stage {
   position: absolute;
   inset: 58px 0 0;
   z-index: 1;
-  padding: 18px 426px 18px 18px;
+  padding: 18px;
   transition: padding-right 220ms cubic-bezier(.2,.8,.2,1);
 }
-.dsh-studio-stage.chat-minimized { padding-right: 18px; }
+.dsh-studio-stage.ai-open { padding-right: 404px; }
 .dsh-studio-surface { width: 100%; height: 100%; display: flex; overflow: hidden; border-radius: 18px; background: rgba(7,16,26,.7); box-shadow: 0 26px 70px rgba(0,0,0,.2); }
 .dsh-studio-surface.vertical { flex-direction: column; }
 .dsh-studio-pane { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; flex: 1 1 0; overflow: hidden; background: rgba(8,18,28,.78); }
@@ -468,52 +474,52 @@ html[data-dsh-studio-active] [data-dsh-studio-footer-actions] {
 html[data-dsh-studio-active] [data-dsh-studio-conversation] {
   position: fixed !important;
   z-index: 84 !important;
-  top: 70px !important;
-  right: 22px !important;
-  bottom: 18px !important;
+  top: 110px !important;
+  right: 0 !important;
+  bottom: 0 !important;
   left: auto !important;
   width: 386px !important;
   height: auto !important;
   min-width: 320px !important;
   overflow: hidden !important;
-  border: 1px solid rgba(96,166,220,.2) !important;
-  border-radius: 18px !important;
-  background: rgba(6,14,23,.96) !important;
-  box-shadow: 0 30px 90px rgba(0,0,0,.52), 0 0 0 1px rgba(75,168,255,.035) inset !important;
-  transition: opacity 180ms ease, transform 220ms cubic-bezier(.2,.8,.2,1) !important;
+  border: 0 !important;
+  border-left: 1px solid rgba(96,166,220,.14) !important;
+  border-radius: 0 !important;
+  background: #07101a !important;
+  box-shadow: none !important;
+  transition: opacity 150ms ease, transform 200ms cubic-bezier(.2,.8,.2,1) !important;
 }
-html[data-dsh-studio-active] [data-dsh-studio-conversation][data-studio-minimized="true"] { opacity: 0 !important; transform: translateY(16px) scale(.97) !important; pointer-events: none !important; }
-
-.dsh-studio-chat-toolbar {
+html[data-dsh-studio-active] [data-dsh-studio-conversation][data-studio-open="false"] { opacity: 0 !important; transform: translateX(100%) !important; pointer-events: none !important; }
+.dsh-studio-ai-sidebar {
   position: fixed;
-  z-index: 96;
-  top: 18px;
-  right: 22px;
+  z-index: 90;
+  top: 58px;
+  right: 0;
+  bottom: 0;
   width: 386px;
-  height: 40px;
+  border-left: 1px solid rgba(96,166,220,.14);
+  background: #07101a;
+  color: #98aec2;
+}
+.dsh-studio-ai-sidebar-head {
+  height: 52px;
   display: flex;
   align-items: center;
   gap: 9px;
   box-sizing: border-box;
-  padding: 0 9px 0 13px;
-  border: 1px solid rgba(96,166,220,.16);
-  border-radius: 13px;
-  background: rgba(7,16,26,.92);
-  color: #98aec2;
-  box-shadow: 0 15px 45px rgba(0,0,0,.34);
-  backdrop-filter: blur(18px);
-  cursor: grab;
+  padding: 0 10px 0 15px;
+  border-bottom: 1px solid rgba(96,166,220,.1);
 }
-.dsh-studio-chat-toolbar:active { cursor: grabbing; }
-.dsh-studio-chat-toolbar strong { flex: 1; color: #c7d9e9; font-size: 11px; font-weight: 560; }
-.dsh-studio-chat-toolbar .status { width: 6px; height: 6px; border-radius: 50%; background: #57b1ff; box-shadow: 0 0 10px rgba(87,177,255,.7); }
-.dsh-studio-chat-toolbar button { width: 27px; height: 27px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: #70869a; cursor: pointer; }
-.dsh-studio-chat-toolbar button:hover { background: rgba(83,151,203,.12); color: #cae1f4; }
+.dsh-studio-ai-sidebar-head .status { width: 6px; height: 6px; border-radius: 50%; background: #57b1ff; box-shadow: 0 0 9px rgba(87,177,255,.55); }
+.dsh-studio-ai-sidebar-head .title { min-width: 0; display: grid; gap: 1px; margin-right: auto; }
+.dsh-studio-ai-sidebar-head .title strong { color: #c7d9e9; font-size: 11px; font-weight: 570; }
+.dsh-studio-ai-sidebar-head .title span { max-width: 125px; overflow: hidden; color: #62798d; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-studio-ai-sidebar-head button { border: 0; background: transparent; color: #70869a; cursor: pointer; }
+.dsh-studio-ai-sidebar-head button:hover { background: rgba(83,151,203,.1); color: #cae1f4; }
+.dsh-studio-ai-sidebar-head .close { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; }
 .dsh-studio-ai-modes { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: rgba(64,113,151,.1); }
-.dsh-studio-chat-toolbar .dsh-studio-ai-modes button { width: auto; height: 23px; padding: 0 8px; border-radius: 6px; color: #6e8498; font-size: 9px; }
-.dsh-studio-chat-toolbar .dsh-studio-ai-modes button.active { background: rgba(75,168,255,.16); color: #79c2ff; }
-.dsh-studio-chat-chip { position: fixed; right: 22px; bottom: 22px; z-index: 96; height: 42px; display: flex; align-items: center; gap: 9px; padding: 0 14px; border: 1px solid rgba(96,166,220,.2); border-radius: 14px; background: rgba(7,16,26,.95); color: #cbe4f8; box-shadow: 0 18px 45px rgba(0,0,0,.42); cursor: pointer; }
-.dsh-studio-chat-chip svg { color: #5db2f8; }
+.dsh-studio-ai-modes button { height: 24px; padding: 0 9px; border-radius: 6px; color: #6e8498; font-size: 9px; }
+.dsh-studio-ai-modes button.active { background: rgba(75,168,255,.16); color: #79c2ff; }
 
 html[data-dsh-studio-theme="light"] {
   color-scheme: light;
@@ -582,6 +588,8 @@ html[data-dsh-studio-theme="light"] .dsh-studio-field select {
   background: #f7f8f9;
   color: #243746;
 }
+html[data-dsh-studio-theme="light"] .dsh-studio-folder-button { border-color: rgba(51,87,114,.13); background: #f7f8f9; color: #607688; }
+html[data-dsh-studio-theme="light"] .dsh-studio-folder-button:hover { border-color: rgba(23,118,188,.28); background: rgba(23,118,188,.06); color: #245f89; }
 html[data-dsh-studio-theme="light"] .dsh-studio-button { background: #edf1f4; color: #536574; }
 html[data-dsh-studio-theme="light"] .dsh-studio-button.primary { background: #e97832; color: #fffaf6; }
 html[data-dsh-studio-theme="light"] .dsh-studio-project-binding { background: rgba(35,111,166,.055); }
@@ -599,6 +607,9 @@ html[data-dsh-studio-theme="light"] .dsh-studio-topbar .path { color: #8b98a3; }
 html[data-dsh-studio-theme="light"] .dsh-studio-layout-button { color: #738391; }
 html[data-dsh-studio-theme="light"] .dsh-studio-layout-button:hover { background: rgba(35,111,166,.065); color: #365c77; }
 html[data-dsh-studio-theme="light"] .dsh-studio-layout-button.active { background: rgba(23,118,188,.1); color: #176ea9; }
+html[data-dsh-studio-theme="light"] .dsh-studio-ai-toggle { color: #6d7f8e; }
+html[data-dsh-studio-theme="light"] .dsh-studio-ai-toggle:hover,
+html[data-dsh-studio-theme="light"] .dsh-studio-ai-toggle.active { background: rgba(23,118,188,.09); color: #176ea9; }
 html[data-dsh-studio-theme="light"] .dsh-studio-surface {
   background: rgba(255,255,255,.7);
   box-shadow: 0 24px 64px rgba(47,65,79,.11);
@@ -619,34 +630,26 @@ html[data-dsh-studio-theme="light"] .dsh-studio-project-pane code { background: 
 html[data-dsh-studio-theme="light"] .dsh-studio-pane-actions button.secondary { background: rgba(23,118,188,.085); color: #176ea9; }
 
 html[data-dsh-studio-theme="light"][data-dsh-studio-active] [data-dsh-studio-conversation] {
-  border-color: rgba(43,99,140,.16) !important;
-  background: rgba(255,255,255,.97) !important;
-  box-shadow: 0 30px 80px rgba(40,59,74,.17), 0 0 0 1px rgba(28,112,171,.025) inset !important;
+  border-left-color: rgba(43,99,140,.13) !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
 }
-html[data-dsh-studio-theme="light"] .dsh-studio-chat-toolbar {
-  border-color: rgba(43,99,140,.15);
-  background: rgba(255,255,255,.94);
+html[data-dsh-studio-theme="light"] .dsh-studio-ai-sidebar {
+  border-left-color: rgba(43,99,140,.13);
+  background: #ffffff;
   color: #667989;
-  box-shadow: 0 15px 42px rgba(40,59,74,.14);
 }
-html[data-dsh-studio-theme="light"] .dsh-studio-chat-toolbar strong { color: #304759; }
-html[data-dsh-studio-theme="light"] .dsh-studio-chat-toolbar .status { background: #2786c8; box-shadow: 0 0 9px rgba(39,134,200,.35); }
-html[data-dsh-studio-theme="light"] .dsh-studio-chat-toolbar button { color: #758694; }
-html[data-dsh-studio-theme="light"] .dsh-studio-chat-toolbar button:hover { background: rgba(35,111,166,.075); color: #285d84; }
+html[data-dsh-studio-theme="light"] .dsh-studio-ai-sidebar-head { border-bottom-color: rgba(43,99,140,.1); }
+html[data-dsh-studio-theme="light"] .dsh-studio-ai-sidebar-head .title strong { color: #304759; }
+html[data-dsh-studio-theme="light"] .dsh-studio-ai-sidebar-head .status { background: #2786c8; box-shadow: 0 0 9px rgba(39,134,200,.3); }
+html[data-dsh-studio-theme="light"] .dsh-studio-ai-sidebar-head button { color: #758694; }
+html[data-dsh-studio-theme="light"] .dsh-studio-ai-sidebar-head button:hover { background: rgba(35,111,166,.075); color: #285d84; }
 html[data-dsh-studio-theme="light"] .dsh-studio-ai-modes { background: rgba(35,111,166,.055); }
-html[data-dsh-studio-theme="light"] .dsh-studio-chat-toolbar .dsh-studio-ai-modes button.active { background: rgba(23,118,188,.1); color: #176ea9; }
-html[data-dsh-studio-theme="light"] .dsh-studio-chat-chip {
-  border-color: rgba(43,99,140,.16);
-  background: rgba(255,255,255,.96);
-  color: #31546e;
-  box-shadow: 0 18px 45px rgba(40,59,74,.15);
-}
-html[data-dsh-studio-theme="light"] .dsh-studio-chat-chip svg { color: #2786c8; }
+html[data-dsh-studio-theme="light"] .dsh-studio-ai-modes button.active { background: rgba(23,118,188,.1); color: #176ea9; }
 
 @media (max-width: 1050px) {
-  .dsh-studio-stage { padding-right: 340px; }
-  .dsh-studio-layouts { padding-right: 340px; }
-  .dsh-studio-chat-toolbar { width: 304px; }
+  .dsh-studio-stage.ai-open { padding-right: 322px; }
+  .dsh-studio-ai-sidebar { width: 304px; }
   html[data-dsh-studio-active] [data-dsh-studio-conversation] { width: 304px !important; min-width: 280px !important; }
 }
 `
@@ -671,11 +674,30 @@ function ProjectDialog({
   const [name, setName] = useState(project?.name ?? '')
   const [layout, setLayout] = useState<Layout>(project?.layout ?? 'single')
   const [kind, setKind] = useState<ProjectKind>(project?.kind ?? 'attached')
-  const workspaces = listWorkspaces()
+  const [workspaces, setWorkspaces] = useState(listWorkspaces)
   const [workspaceId, setWorkspaceId] = useState(project?.workspaceId ?? workspaces[0]?.id ?? '')
   const [folderName, setFolderName] = useState('')
   const [saving, setSaving] = useState(false)
+  const [picking, setPicking] = useState(false)
   const [error, setError] = useState('')
+  const pickLocalFolder = async () => {
+    setPicking(true)
+    setError('')
+    try {
+      const path = await dshBridge?.uiWorkspace?.pickDirectory?.()
+      if (!path) return
+      const workspace = await dshBridge?.workspaces?.create?.({ path })
+      const id = String(workspace?.workspaceId ?? workspace?.id ?? '')
+      if (!id) throw new Error('所选文件夹无法注册为 DSH 工作区')
+      const title = String(workspace?.title ?? path.split(/[\\/]/).filter(Boolean).at(-1) ?? '本地项目')
+      const option = { id, title, path: String(workspace?.path ?? path) }
+      setWorkspaces(current => [...current.filter(item => item.id !== id), option])
+      setWorkspaceId(id)
+      if (name.trim() === '') setName(title)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally { setPicking(false) }
+  }
   const save = async () => {
     setSaving(true)
     setError('')
@@ -686,14 +708,8 @@ function ProjectDialog({
       if (project === undefined && kind === 'generated') {
         const folder = folderName.trim().replace(/^[\\/]+|[\\/]+$/g, '')
         if (!folder) throw new Error('请输入新项目文件夹名称')
-        const path = `${parent.path.replace(/[\\/]+$/, '')}/${folder}`
-        const response = await fetch('/api/personal-studio/projects/create', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ parent: parent.path, name: folder }),
-        })
-        const body = await response.json()
-        if (!response.ok || !body?.ok) throw new Error(body?.error ?? '无法创建项目目录')
+        const path = await dshBridge?.uiWorkspace?.createDirectory?.(parent.path, folder)
+        if (!path) throw new Error('无法创建项目目录')
         const created = await dshBridge?.workspaces?.create?.({ path })
         const createdId = created?.workspaceId ?? created?.id
         if (!createdId) throw new Error('项目目录已创建，但无法注册为 DSH 工作区')
@@ -740,11 +756,14 @@ function ProjectDialog({
         </div>
         {project === undefined && (
           <div className="dsh-studio-field">
-            <label htmlFor="studio-project-workspace">{kind === 'attached' ? '选择已添加的 DSH 工作区' : '选择新项目的父工作区'}</label>
+            <label htmlFor="studio-project-workspace">{kind === 'attached' ? '选择 DSH 工作区' : '选择新项目的父工作区'}</label>
             <select id="studio-project-workspace" value={workspaceId} onChange={event => { setWorkspaceId(event.target.value) }}>
               {workspaces.length === 0 && <option value="">暂无可用工作区</option>}
-              {workspaces.map(item => <option key={item.id} value={item.id}>{item.title} — {item.path}</option>)}
+              {workspaces.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
             </select>
+            <button className="dsh-studio-folder-button" type="button" disabled={picking} onClick={() => { void pickLocalFolder() }}>
+              <IconFolderClose16 size={14} />{picking ? '正在打开…' : kind === 'attached' ? '从电脑选择项目文件夹' : '从电脑选择父文件夹'}
+            </button>
           </div>
         )}
         {project === undefined && kind === 'generated' && (
@@ -753,7 +772,7 @@ function ProjectDialog({
             <input id="studio-project-folder" value={folderName} onChange={event => { setFolderName(event.target.value) }} placeholder="例如：my-new-project" />
           </div>
         )}
-        {project !== undefined && <div className="dsh-studio-project-binding"><span>本地项目</span><strong>{project.path}</strong></div>}
+        {project !== undefined && <div className="dsh-studio-project-binding"><span>工作区连接</span><strong>已连接到 DSH 工作区</strong></div>}
         {error !== '' && <div className="dsh-studio-dialog-error">{error}</div>}
         <div className="dsh-studio-field">
           <label htmlFor="studio-project-layout">初始视图</label>
@@ -766,7 +785,7 @@ function ProjectDialog({
         </div>
         <div className="dsh-studio-dialog-actions">
           <button className="dsh-studio-button" type="button" onClick={onClose}>取消</button>
-          <button className="dsh-studio-button primary" type="button" disabled={saving || name.trim() === '' || workspaceId === ''} onClick={() => { void save() }}>{saving ? '正在连接…' : '保存项目'}</button>
+          <button className="dsh-studio-button primary" type="button" disabled={saving || picking || name.trim() === '' || workspaceId === ''} onClick={() => { void save() }}>{saving ? '正在连接…' : '保存项目'}</button>
         </div>
       </div>
     </div>
@@ -979,7 +998,6 @@ function Pane({ project, index, onMode }: { project: Project; index: number; onM
         <div className="eyebrow">{project.kind === 'generated' ? 'AI 生成项目' : '本地项目'}</div>
         <strong>{details.title}</strong>
         <p>{details.description}</p>
-        <code>{project.path}</code>
         <div className="dsh-studio-pane-actions">
           <button type="button" onClick={() => { onMode('analyze', kind === 'report' ? '请基于当前项目已有数据和产物形成一份总结报告。' : '请读取当前项目，先给我一份结构、现状和关键数据的分析。') }}>交给 AI 分析</button>
           <button type="button" className="secondary" onClick={() => { onMode('build') }}>{project.kind === 'generated' ? '开始生成项目' : '修改这个项目'}</button>
@@ -1042,8 +1060,9 @@ function StudioOverlay() {
   const state = useStudio()
   const project = state.projects.find(item => item.id === state.activeId)
   const [sidebarRight, setSidebarRight] = useState(0)
-  const [chatMinimized, setChatMinimized] = useState(false)
-  const [chatPosition, setChatPosition] = useState<{ x: number; y: number } | null>(null)
+  const [aiOpen, setAiOpen] = useState(false)
+
+  useEffect(() => { setAiOpen(false) }, [project?.id])
 
   useLayoutEffect(() => {
     if (project === undefined) return
@@ -1064,24 +1083,12 @@ function StudioOverlay() {
     const root = findConversationRoot()
     if (root === null) return
     root.setAttribute('data-dsh-studio-conversation', '')
-    root.setAttribute('data-studio-minimized', String(chatMinimized))
-    if (chatPosition !== null && !chatMinimized) {
-      root.style.setProperty('left', `${chatPosition.x}px`, 'important')
-      root.style.setProperty('top', `${chatPosition.y + 52}px`, 'important')
-      root.style.setProperty('right', 'auto', 'important')
-      root.style.setProperty('bottom', '18px', 'important')
-    } else {
-      root.style.removeProperty('left')
-      root.style.removeProperty('top')
-      root.style.removeProperty('right')
-      root.style.removeProperty('bottom')
-    }
+    root.setAttribute('data-studio-open', String(aiOpen))
     return () => {
       root.removeAttribute('data-dsh-studio-conversation')
-      root.removeAttribute('data-studio-minimized')
-      for (const property of ['left', 'top', 'right', 'bottom']) root.style.removeProperty(property)
+      root.removeAttribute('data-studio-open')
     }
-  }, [project?.id, chatMinimized, chatPosition])
+  }, [project?.id, aiOpen])
 
   if (project === undefined) return null
 
@@ -1091,34 +1098,13 @@ function StudioOverlay() {
   const handleMode = async (mode: AiMode, prompt?: string) => {
     try {
       const next = await openProjectMode(project, mode)
-      setChatMinimized(false)
+      setAiOpen(true)
       const sessionId = next.sessions[mode]
       if (prompt && sessionId) await promptIntoSession(sessionId, prompt)
     } catch (reason) {
       window.alert(reason instanceof Error ? reason.message : String(reason))
     }
   }
-  const dragChat = (event: React.PointerEvent) => {
-    if ((event.target as HTMLElement).closest('button') !== null) return
-    event.preventDefault()
-    const toolbar = event.currentTarget.getBoundingClientRect()
-    const offsetX = event.clientX - toolbar.left
-    const offsetY = event.clientY - toolbar.top
-    const onMove = (move: PointerEvent) => {
-      setChatPosition({
-        x: Math.max(sidebarRight + 18, Math.min(window.innerWidth - toolbar.width - 18, move.clientX - offsetX)),
-        y: Math.max(12, Math.min(window.innerHeight - 180, move.clientY - offsetY)),
-      })
-    }
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-  }
-  const toolbarStyle = chatPosition === null ? undefined : { left: chatPosition.x, top: chatPosition.y, right: 'auto' }
-
   return (
     <>
       <main className="dsh-studio-overlay" style={{ left: sidebarRight }}>
@@ -1127,51 +1113,45 @@ function StudioOverlay() {
           <span className="project-mark"><IconSparkle16 size={15} /></span>
           <div>
             <h1>{project.name}</h1>
-            <span className="path">{project.path}</span>
+            <span className="path">{project.kind === 'generated' ? 'AI 创建项目' : '本地项目'}</span>
           </div>
-          <div className={`dsh-studio-layouts${chatMinimized ? ' chat-minimized' : ''}`} aria-label="项目布局">
-            <button
-              type="button"
-              className="dsh-studio-theme-button"
-              aria-label={state.theme === 'dark' ? '切换为浅色界面' : '切换为深色界面'}
-              title={state.theme === 'dark' ? '浅色界面' : '深色界面'}
-              onClick={() => { setTheme(state.theme === 'dark' ? 'light' : 'dark') }}
-            >
-              {state.theme === 'dark' ? <IconLightOutline16 size={15} /> : <IconDarkOutline16 size={15} />}
-            </button>
-            {([
-              ['single', '单画布'], ['dual', '双区'], ['triple', '三栏'], ['vertical', '上下'],
-            ] as const).map(([layout, label]) => (
-              <button key={layout} type="button" className={`dsh-studio-layout-button${project.layout === layout ? ' active' : ''}`} onClick={() => { changeLayout(layout) }}>{label}</button>
-            ))}
+          <div className="dsh-studio-topbar-actions">
+            {project.aiMode === 'build' && <div className="dsh-studio-layouts" aria-label="项目布局">
+              {([
+                ['single', '单画布'], ['dual', '双区'], ['triple', '三栏'], ['vertical', '上下'],
+              ] as const).map(([layout, label]) => (
+                <button key={layout} type="button" className={`dsh-studio-layout-button${project.layout === layout ? ' active' : ''}`} onClick={() => { changeLayout(layout) }}>{label}</button>
+              ))}
+            </div>}
+            <button className={`dsh-studio-ai-toggle${aiOpen ? ' active' : ''}`} type="button" aria-label={aiOpen ? '收起 AI 侧栏' : '展开 AI 侧栏'} title={aiOpen ? '收起 AI 侧栏' : '展开 AI 侧栏'} onClick={() => {
+              if (aiOpen) setAiOpen(false)
+              else void handleMode(project.aiMode)
+            }}><IconPanelLeftOutline16 size={17} /></button>
           </div>
         </header>
-        <div className={`dsh-studio-stage${chatMinimized ? ' chat-minimized' : ''}`}>
+        <div className={`dsh-studio-stage${aiOpen ? ' ai-open' : ''}`}>
           <SplitSurface project={project} onMode={(mode, prompt) => { void handleMode(mode, prompt) }} />
         </div>
       </main>
-      {!chatMinimized ? (
-        <div className="dsh-studio-chat-toolbar" style={toolbarStyle} onPointerDown={dragChat}>
+      {aiOpen && <aside className="dsh-studio-ai-sidebar">
+        <div className="dsh-studio-ai-sidebar-head">
           <span className="status" />
-          <strong>{project.name}</strong>
+          <div className="title"><strong>AI 助手</strong><span>{project.name}</span></div>
           <div className="dsh-studio-ai-modes" aria-label="AI 工作模式">
             <button type="button" className={project.aiMode === 'analyze' ? 'active' : ''} onClick={() => { void handleMode('analyze') }}>分析</button>
             <button type="button" className={project.aiMode === 'build' ? 'active' : ''} onClick={() => { void handleMode('build') }}>构建</button>
           </div>
-          {chatPosition !== null && <button type="button" aria-label="停靠右侧" title="停靠右侧" onClick={() => { setChatPosition(null) }}><IconPanelLeftOutline16 size={14} /></button>}
-          <button type="button" aria-label="最小化 AI" title="最小化" onClick={() => { setChatMinimized(true) }}><IconChevronDownOutline14 /></button>
+          <button className="close" type="button" aria-label="收起 AI 侧栏" title="收起 AI 侧栏" onClick={() => { setAiOpen(false) }}><IconCloseOutline16 size={14} /></button>
         </div>
-      ) : (
-        <button className="dsh-studio-chat-chip" type="button" onClick={() => { setChatMinimized(false) }}><IconSparkle16 size={15} />AI 协作</button>
-      )}
+      </aside>}
     </>
   )
 }
 
-export const inject = ['slots', 'theme', 'sessions', 'conversation', 'workspaces']
+export const inject = ['slots', 'theme', 'sessions', 'conversation', 'workspaces', 'uiWorkspace']
 
 export function apply(ctx: any): void {
-  dshBridge = { sessions: ctx.sessions, conversation: ctx.conversation, workspaces: ctx.workspaces }
+  dshBridge = { sessions: ctx.sessions, conversation: ctx.conversation, workspaces: ctx.workspaces, uiWorkspace: ctx.uiWorkspace }
   nativeTheme = ctx.theme
   const syncTheme = (themeSnapshot = ctx.theme.getTheme()) => {
     const theme = themeSnapshot.active.colorScheme as Theme
