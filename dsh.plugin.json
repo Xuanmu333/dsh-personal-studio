@@ -1,0 +1,12 @@
+{
+  "name": "dsh-personal-studio",
+  "description": "Personal project studio for DeepSeek Harness",
+  "version": "0.1.0",
+  "entry": {
+    "name": "dsh-personal-studio",
+    "inject": []
+  },
+  "client": {
+    "platform": "web"
+  }
+}
