@@ -68,6 +68,8 @@ pnpm run dsh --profile web
 
 Windows 版本会通过系统命令解释器启动 `npm`、`pnpm` 或 `yarn` 项目，并在插件关闭时清理对应的子进程树。
 
+选中项目后，顶部终端按钮会以项目目录为工作目录：macOS 打开 Terminal，Windows 打开 PowerShell。
+
 ## 开发
 
 ```bash

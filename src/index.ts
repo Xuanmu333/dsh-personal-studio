@@ -125,6 +125,33 @@ async function createProjectDirectory(parentPath: string, name: string): Promise
   return await fs.realpath(path)
 }
 
+async function openProjectTerminal(projectPath: string): Promise<'terminal' | 'powershell'> {
+  const root = await fs.realpath(resolve(projectPath))
+  if (!(await fs.stat(root)).isDirectory()) throw new Error('项目路径不是文件夹')
+
+  const command = process.platform === 'darwin' ? 'open'
+    : process.platform === 'win32' ? 'powershell.exe'
+      : undefined
+  if (command === undefined) throw new Error('当前系统暂不支持打开原生终端')
+  const args = process.platform === 'darwin' ? ['-a', 'Terminal', root] : ['-NoExit']
+
+  await new Promise<void>((accept, reject) => {
+    const child = spawn(command, args, {
+      cwd: root,
+      detached: true,
+      shell: false,
+      windowsHide: false,
+      stdio: 'ignore',
+    })
+    child.once('error', reject)
+    child.once('spawn', () => {
+      child.unref()
+      accept()
+    })
+  })
+  return process.platform === 'darwin' ? 'terminal' : 'powershell'
+}
+
 export function apply(ctx: any): void {
   ctx.effect(() => {
     const unregisterLaunch = ctx.webServer.register({
@@ -164,9 +191,28 @@ export function apply(ctx: any): void {
         }
       },
     })
+    const unregisterOpenTerminal = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/personal-studio/open-terminal',
+      handler: async (req: any, res: any) => {
+        if (req.method !== 'POST') {
+          json(res, 405, { error: '只支持 POST 请求' })
+          return
+        }
+        try {
+          const body = await requestBody(req) as { path?: unknown }
+          if (typeof body.path !== 'string' || body.path.trim() === '') throw new Error('缺少项目路径')
+          const terminal = await openProjectTerminal(body.path)
+          json(res, 200, { terminal })
+        } catch (reason) {
+          json(res, 422, { error: reason instanceof Error ? reason.message : String(reason) })
+        }
+      },
+    })
     return async () => {
       unregisterLaunch()
       unregisterCreateDirectory()
+      unregisterOpenTerminal()
       for (const { child } of running.values()) stopProject(child)
       running.clear()
     }

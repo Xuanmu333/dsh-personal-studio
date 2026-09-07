@@ -2,7 +2,7 @@ import {
   useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { PanelsTopLeft } from 'lucide-react'
+import { PanelsTopLeft, SquareTerminal } from 'lucide-react'
 import {
   IconChevronRightOutline14,
   IconCloseOutline16,
@@ -189,6 +189,16 @@ async function launchProjectPreview(path: string): Promise<Extract<PreviewState,
   if (value.kind === 'workspace') return { status: 'workspace' }
   if (value.kind === 'web' && typeof value.url === 'string') return { status: 'ready', url: value.url }
   throw new Error('无法识别项目启动方式')
+}
+
+async function openProjectTerminal(path: string): Promise<void> {
+  const response = await fetch('/api/personal-studio/open-terminal', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+  const value = await response.json() as { error?: string }
+  if (!response.ok) throw new Error(value.error ?? '无法打开项目终端')
 }
 
 async function createProjectDirectory(parentPath: string, name: string): Promise<string> {
@@ -509,6 +519,7 @@ html[data-dsh-studio-active] [data-dsh-studio-footer-actions] {
 .dsh-studio-topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 9px; }
 .dsh-studio-ai-toggle { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: #71879b; cursor: pointer; }
 .dsh-studio-ai-toggle svg { transform: scaleX(-1); }
+.dsh-studio-terminal-toggle svg { transform: none; }
 .dsh-studio-ai-toggle:hover, .dsh-studio-ai-toggle.active { background: rgba(75,168,255,.12); color: #7dc3ff; }
 
 .dsh-studio-stage {
@@ -1797,6 +1808,11 @@ function StudioOverlay() {
             <h1>Workspace</h1>
           </div>
           <div className="dsh-studio-topbar-actions">
+            <button className="dsh-studio-ai-toggle dsh-studio-terminal-toggle" type="button" aria-label="在终端中打开项目" title="在终端中打开项目" onClick={() => {
+              void openProjectTerminal(project.path).catch(reason => {
+                window.alert(reason instanceof Error ? reason.message : String(reason))
+              })
+            }}><SquareTerminal size={17} strokeWidth={1.8} /></button>
             <button className={`dsh-studio-ai-toggle${aiOpen ? ' active' : ''}`} type="button" aria-label={aiOpen ? '收起 AI 侧栏' : '展开 AI 侧栏'} title={aiOpen ? '收起 AI 侧栏' : '展开 AI 侧栏'} onClick={() => {
               if (aiOpen) setAiProjectId(null)
               else void handleMode(project.aiMode)
