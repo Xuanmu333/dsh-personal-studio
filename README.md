@@ -10,7 +10,7 @@
 - 通过系统文件夹选择器直接接入本机项目，并注册为 DSH 工作区；不使用 iframe 嵌入运行页面。
 - 在现有工作区下创建空项目目录，并注册为新的 DSH 工作区。
 - 为每个项目分别保留“分析”和“构建”两种 AI 会话。
-- 构建模式支持单画布、左右双区、三栏和上下双区布局；分析模式保持简洁单画布。
+- 项目默认使用简洁单画布。
 - AI 面板使用右上角按钮展开为 VS Code 风格的右侧边栏。
 - 跟随 DSH 原生深色与浅色主题。
 
@@ -26,7 +26,9 @@ AI 可以在当前项目工作区中生成新项目，或检查并修改已经�
 
 ## 安装
 
-要求：已经从源码安装并可以运行 DeepSeek Harness。
+要求：已经从源码安装并可以运行 DeepSeek Harness，并安装 Node.js、pnpm 和 Git。
+
+### macOS / Linux
 
 ```bash
 git clone https://github.com/Xuanmu333/dsh-personal-studio.git
@@ -34,7 +36,17 @@ cd ~/.dsh/profiles/web
 pnpm add link:/absolute/path/to/dsh-personal-studio
 ```
 
-然后在 `~/.dsh/profiles/web/package.json` 的 `dsh.profile.bundles` 中加入：
+### Windows
+
+推荐直接从 GitHub 安装，避免手动处理 Windows 链接路径。在 PowerShell 中运行：
+
+```powershell
+Set-Location "$env:USERPROFILE\.dsh\profiles\web"
+pnpm add github:Xuanmu333/dsh-personal-studio
+```
+
+然后在 macOS/Linux 的 `~/.dsh/profiles/web/package.json`，或 Windows 的
+`%USERPROFILE%\.dsh\profiles\web\package.json` 中，将插件加入 `dsh.profile.bundles`：
 
 ```json
 "dsh-personal-studio"
@@ -46,6 +58,15 @@ pnpm add link:/absolute/path/to/dsh-personal-studio
 cd /path/to/deepseek-harness
 pnpm run dsh --profile web
 ```
+
+Windows PowerShell：
+
+```powershell
+Set-Location "C:\path\to\deepseek-harness"
+pnpm run dsh --profile web
+```
+
+Windows 版本会通过系统命令解释器启动 `npm`、`pnpm` 或 `yarn` 项目，并在插件关闭时清理对应的子进程树。
 
 ## 开发
 

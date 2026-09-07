@@ -8,6 +8,7 @@ export const inject = ['webServer']
 
 type RunningProject = { child: ChildProcess; url: string }
 const running = new Map<string, RunningProject>()
+const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
 
 function json(res: any, status: number, value: unknown): void {
   res.writeHead(status, {
@@ -45,6 +46,20 @@ async function availablePort(): Promise<number> {
   })
 }
 
+function stopProject(child: ChildProcess): void {
+  if (child.exitCode !== null || child.killed) return
+  if (process.platform !== 'win32' || child.pid === undefined) {
+    child.kill('SIGTERM')
+    return
+  }
+  const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  killer.once('error', () => { if (child.exitCode === null) child.kill() })
+  killer.once('exit', code => { if (code !== 0 && child.exitCode === null) child.kill() })
+}
+
 async function waitForPreview(url: string, child: ChildProcess): Promise<void> {
   const deadline = Date.now() + 15_000
   while (Date.now() < deadline) {
@@ -55,7 +70,7 @@ async function waitForPreview(url: string, child: ChildProcess): Promise<void> {
     } catch { /* The local server is still starting. */ }
     await new Promise(accept => { setTimeout(accept, 250) })
   }
-  child.kill('SIGTERM')
+  stopProject(child)
   throw new Error('项目启动超过 15 秒，请检查项目的启动脚本')
 }
 
@@ -78,6 +93,8 @@ async function launchProject(projectPath: string): Promise<{ kind: 'workspace' }
   const args = command === 'yarn' ? [script] : ['run', script]
   const child = spawn(command, args, {
     cwd: root,
+    shell: process.platform === 'win32',
+    windowsHide: true,
     env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', NO_OPEN: '1', BROWSER: 'none' },
     stdio: 'ignore',
   })
@@ -92,6 +109,9 @@ async function createProjectDirectory(parentPath: string, name: string): Promise
   const folder = name.trim()
   if (folder === '' || folder === '.' || folder === '..' || /[\\/]/.test(folder)) {
     throw new Error('项目文件夹名称只能是一个有效的文件夹名称')
+  }
+  if (/[<>:"|?*\u0000-\u001f]/.test(folder) || /[. ]$/.test(folder) || WINDOWS_RESERVED_NAME.test(folder)) {
+    throw new Error('项目文件夹名称不符合 Windows 命名规则')
   }
   const parent = await fs.realpath(resolve(parentPath))
   if (!(await fs.stat(parent)).isDirectory()) throw new Error('所选父工作区不是文件夹')
@@ -147,7 +167,7 @@ export function apply(ctx: any): void {
     return async () => {
       unregisterLaunch()
       unregisterCreateDirectory()
-      for (const { child } of running.values()) child.kill('SIGTERM')
+      for (const { child } of running.values()) stopProject(child)
       running.clear()
     }
   }, 'dsh-personal-studio: project preview launcher')
