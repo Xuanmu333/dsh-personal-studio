@@ -41,6 +41,7 @@
     }
   },
   "devDependencies": {
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "lucide-react": "^0.468.0"
   }
 }
