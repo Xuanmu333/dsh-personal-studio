@@ -28,6 +28,7 @@ const WINDOWS_GEMINI_ENV = {
   grpc_proxy: 'http://hkhkg01proxy02.lenovo.com:3128',
   no_proxy: 'storage.googleapis.com,.ubuntu.com,.aliyun.com,.163.com,.mot.com,.lenovo.com,.motorola.com,10.0.0.0/8,100.64.0.0/11,127.0.0.1,127.0.1,1localhost',
   GOOGLE_CLOUD_PROJECT: 'moto-gemini-assist',
+  GEMINI_CLI_TRUST_WORKSPACE: 'true',
 } as const
 const WORK_LOG_DIRECTORY = process.env.DSH_PERSONAL_STUDIO_WORK_LOG_DIR
   ? resolve(process.env.DSH_PERSONAL_STUDIO_WORK_LOG_DIR)

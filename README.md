@@ -70,7 +70,7 @@ pnpm run dsh --profile web
 
 Windows 版本会通过系统命令解释器启动 `npm`、`pnpm` 或 `yarn` 项目，并在插件关闭时清理对应的子进程树。
 
-在 Windows 中打开内嵌 Terminal 时，插件会为该 PowerShell 会话加载预设的 Lenovo 代理、`moto-gemini-assist` Google Cloud 项目，并在当前项目根目录自动运行 `gemini`。这些环境变量只作用于该终端子进程，不修改 Windows 的全局环境变量；内嵌 PowerShell 自身会保持运行，因此不需要再执行 `cmd /k`。
+在 Windows 中打开内嵌 Terminal 时，插件会为该 PowerShell 会话加载预设的 Lenovo 代理、`moto-gemini-assist` Google Cloud 项目，并在当前项目根目录自动运行 `gemini`。该会话通过 `GEMINI_CLI_TRUST_WORKSPACE=true` 信任用户主动在 Personal Studio 中打开的项目，以支持 Gemini CLI 的无交互启动。这些环境变量只作用于该终端子进程，不修改 Windows 的全局环境变量；内嵌 PowerShell 自身会保持运行，因此不需要再执行 `cmd /k`。
 
 选中项目后，顶部终端按钮会在 Personal Studio 内展开项目终端侧栏，并以项目目录为工作目录：macOS 使用当前 shell，Windows 使用 PowerShell。
 
