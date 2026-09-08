@@ -32,6 +32,10 @@
     "build": "node build.mjs",
     "check": "node --check lib/index.js && node --check lib/client.js"
   },
+  "dependencies": {
+    "@xterm/xterm": "6.0.0",
+    "node-pty": "1.1.0"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*"
   },

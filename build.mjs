@@ -13,7 +13,7 @@ await build({
   platform: 'node',
   format: 'esm',
   target: ['node22'],
-  external: ['@deepseek-ai/*', 'node:*'],
+  external: ['@deepseek-ai/*', 'node:*', 'node-pty'],
 })
 
 await build({
@@ -24,6 +24,7 @@ await build({
   format: 'cjs',
   target: ['es2022'],
   jsx: 'automatic',
+  loader: { '.css': 'text' },
   external: [
     '@deepseek-ai/*',
     'react',

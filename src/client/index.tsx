@@ -1,7 +1,9 @@
 import {
-  useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type DragEvent, type FormEvent,
+  useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type DragEvent,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { Terminal } from '@xterm/xterm'
+import xtermCss from '@xterm/xterm/css/xterm.css'
 import { CalendarDays, Check, ChevronLeft, ChevronRight, PanelsTopLeft, SquareTerminal } from 'lucide-react'
 import {
   IconChevronRightOutline14,
@@ -30,7 +32,7 @@ type PreviewState =
 
 type TerminalSnapshot = {
   sessionId: string
-  shell: 'terminal' | 'powershell'
+  shell: 'terminal' | 'gemini'
   output: string
   offset: number
   status: 'running' | 'exited'
@@ -256,6 +258,17 @@ async function terminalRequest(path: string, body: Record<string, unknown>): Pro
 
 async function openProjectTerminal(path: string): Promise<TerminalSnapshot> {
   return await terminalRequest('/api/personal-studio/open-terminal', { path })
+}
+
+async function resizeProjectTerminal(sessionId: string, columns: number, rows: number): Promise<void> {
+  const response = await fetch('/api/personal-studio/resize-terminal', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId, columns, rows }),
+  })
+  if (response.ok) return
+  const value = await response.json() as { error?: string }
+  throw new Error(value.error ?? '终端尺寸调整失败')
 }
 
 async function workLogRequest<T>(path: string, body: Record<string, unknown>): Promise<T> {
@@ -687,15 +700,9 @@ html[data-dsh-studio-active] [data-dsh-studio-conversation][data-studio-switchin
 .dsh-studio-ai-modes button.active { background: rgba(75,168,255,.16); color: #79c2ff; }
 .dsh-studio-terminal-sidebar { display: flex; flex-direction: column; }
 .dsh-studio-terminal-shell { margin-left: auto; padding: 4px 8px; border-radius: 7px; background: rgba(64,113,151,.1); color: #70869a; font: 500 9px/1 var(--studio-font-text); }
-.dsh-studio-terminal-body { min-height: 0; flex: 1; overflow: auto; padding: 16px 17px 24px; background: rgba(0,0,0,.17); scroll-behavior: smooth; }
-.dsh-studio-terminal-output { min-height: 100%; margin: 0; color: #c4d5e3; font: 12px/1.65 "SFMono-Regular", "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.dsh-studio-terminal-empty { display: grid; height: 100%; place-items: center; color: #60768b; font-size: 11px; text-align: center; }
-.dsh-studio-terminal-form { display: flex; align-items: center; gap: 8px; margin: 0 12px 12px; padding: 7px 8px 7px 12px; border: 1px solid rgba(96,166,220,.14); border-radius: 12px; background: rgba(255,255,255,.055); box-shadow: 0 8px 24px rgba(0,0,0,.14); }
-.dsh-studio-terminal-prompt { color: #57b1ff; font: 600 13px/1 "SFMono-Regular", "Cascadia Mono", Consolas, monospace; }
-.dsh-studio-terminal-input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--studio-ink); font: 12px/1.4 "SFMono-Regular", "Cascadia Mono", Consolas, monospace !important; }
-.dsh-studio-terminal-input::placeholder { color: var(--studio-dim); }
-.dsh-studio-terminal-submit { width: 29px; height: 29px; display: grid; flex: 0 0 29px; place-items: center; border: 0; border-radius: 9px; background: var(--studio-blue); color: white; cursor: pointer; }
-.dsh-studio-terminal-submit:disabled { opacity: .38; cursor: default; }
+.dsh-studio-terminal-body { min-height: 0; flex: 1; overflow: hidden; padding: 12px 10px 10px 13px; background: rgba(0,0,0,.17); }
+.dsh-studio-terminal-body .xterm { height: 100%; }
+.dsh-studio-terminal-body .xterm-viewport { background: transparent !important; }
 .dsh-studio-calendar-sidebar { display: flex; flex-direction: column; }
 .dsh-studio-calendar-sidebar, .dsh-studio-ai-header-shell { animation: dsh-studio-panel-in 260ms cubic-bezier(.22,1,.36,1) both; }
 .dsh-studio-calendar-sidebar.closing, .dsh-studio-ai-header-shell.closing { pointer-events: none; animation: dsh-studio-panel-out 200ms cubic-bezier(.4,0,1,1) both; }
@@ -1033,9 +1040,7 @@ html[data-dsh-studio-theme="light"] .dsh-studio-ai-modes { background: rgba(120,
 html[data-dsh-studio-theme="light"] .dsh-studio-ai-modes button { color: var(--studio-muted); }
 html[data-dsh-studio-theme="light"] .dsh-studio-ai-modes button.active { background: rgba(255,255,255,.9); color: var(--studio-ink); box-shadow: 0 1px 4px rgba(0,0,0,.12); }
 html[data-dsh-studio-theme="light"] .dsh-studio-terminal-shell { background: rgba(120,120,128,.09); color: var(--studio-muted); }
-html[data-dsh-studio-theme="light"] .dsh-studio-terminal-body { background: rgba(248,249,251,.78); }
-html[data-dsh-studio-theme="light"] .dsh-studio-terminal-output { color: #263543; }
-html[data-dsh-studio-theme="light"] .dsh-studio-terminal-form { border-color: rgba(60,60,67,.12); background: rgba(255,255,255,.92); box-shadow: 0 8px 24px rgba(35,45,55,.08); }
+html[data-dsh-studio-theme="light"] .dsh-studio-terminal-body { background: #111820; }
 html[data-dsh-studio-theme="light"] .dsh-studio-calendar-card,
 html[data-dsh-studio-theme="light"] .dsh-studio-note-card { border-color: rgba(60,60,67,.1); background: rgba(255,255,255,.72); }
 html[data-dsh-studio-theme="light"] .dsh-studio-note-actions { border-top-color: rgba(60,60,67,.09); }
@@ -1990,97 +1995,108 @@ function CalendarPanel({ closing, onClose, onDirtyChange }: { closing: boolean; 
 function TerminalPanel({ project, onClose }: { project: Project; onClose: () => void }) {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [shell, setShell] = useState<TerminalSnapshot['shell']>('terminal')
-  const [status, setStatus] = useState<TerminalSnapshot['status']>('running')
-  const [output, setOutput] = useState('')
-  const [input, setInput] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const offset = useRef(0)
-  const outputRoot = useRef<HTMLDivElement>(null)
+  const terminalRoot = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    const root = terminalRoot.current
+    if (root === null) return
     let cancelled = false
     let timer: number | undefined
+    let inputTimer: number | undefined
+    let pendingInput = ''
+    let requestQueue = Promise.resolve()
+    let currentSessionId: string | null = null
+    let currentOffset = 0
+    let running = true
+    const terminal = new Terminal({
+      allowProposedApi: false,
+      convertEol: false,
+      cursorBlink: true,
+      cursorStyle: 'bar',
+      fontFamily: '"SFMono-Regular", "Cascadia Mono", Consolas, monospace',
+      fontSize: 12,
+      lineHeight: 1.35,
+      scrollback: 5000,
+      theme: {
+        background: '#00000000',
+        foreground: '#c4d5e3',
+        cursor: '#69b7ff',
+        selectionBackground: '#3b82f655',
+      },
+    })
+    terminal.open(root)
+    terminal.focus()
     setSessionId(null)
-    setOutput('')
-    setError('')
-    offset.current = 0
 
-    const append = (snapshot: TerminalSnapshot, replace = false) => {
-      offset.current = snapshot.offset
+    const append = (snapshot: TerminalSnapshot) => {
+      currentOffset = snapshot.offset
+      currentSessionId = snapshot.sessionId
+      running = snapshot.status === 'running'
       setSessionId(snapshot.sessionId)
       setShell(snapshot.shell)
-      setStatus(snapshot.status)
-      setOutput(previous => replace ? snapshot.output : previous + snapshot.output)
+      if (snapshot.output !== '') terminal.write(snapshot.output)
     }
-    const poll = async (id: string) => {
-      let running = true
-      try {
-        const next = await terminalRequest('/api/personal-studio/read-terminal', { sessionId: id, offset: offset.current })
-        if (cancelled) return
-        append(next)
-        running = next.status === 'running'
-        setError('')
-      } catch (reason) {
-        if (cancelled) return
-        setError(reason instanceof Error ? reason.message : String(reason))
-      }
-      if (!cancelled && running) timer = window.setTimeout(() => { void poll(id) }, 350)
+    const showError = (reason: unknown) => {
+      if (cancelled) return
+      terminal.writeln(`\r\n\x1b[31m${reason instanceof Error ? reason.message : String(reason)}\x1b[0m`)
     }
+    const requestSnapshot = (path: string, body: Record<string, unknown> = {}) => {
+      requestQueue = requestQueue.then(async () => {
+        if (cancelled || currentSessionId === null) return
+        const next = await terminalRequest(path, { ...body, sessionId: currentSessionId, offset: currentOffset })
+        if (!cancelled) append(next)
+      }).catch(showError)
+      return requestQueue
+    }
+    const poll = () => {
+      if (cancelled || !running) return
+      void requestSnapshot('/api/personal-studio/read-terminal').finally(() => {
+        if (!cancelled && running) timer = window.setTimeout(poll, 80)
+      })
+    }
+    const flushInput = () => {
+      inputTimer = undefined
+      if (pendingInput === '' || currentSessionId === null || !running) return
+      const data = pendingInput
+      pendingInput = ''
+      void requestSnapshot('/api/personal-studio/send-terminal', { data })
+    }
+    const inputDisposable = terminal.onData(data => {
+      pendingInput += data
+      if (inputTimer === undefined) inputTimer = window.setTimeout(flushInput, 12)
+    })
+    const fit = () => {
+      const columns = Math.max(20, Math.min(320, Math.floor(root.clientWidth / 7.25)))
+      const rows = Math.max(5, Math.min(200, Math.floor(root.clientHeight / 16.2)))
+      terminal.resize(columns, rows)
+      if (currentSessionId !== null) void resizeProjectTerminal(currentSessionId, columns, rows).catch(showError)
+    }
+    const resizeObserver = new ResizeObserver(fit)
+    resizeObserver.observe(root)
     void openProjectTerminal(project.path).then(opened => {
       if (cancelled) return
-      append(opened, true)
-      timer = window.setTimeout(() => { void poll(opened.sessionId) }, 250)
-    }).catch(reason => {
-      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
-    })
+      append(opened)
+      fit()
+      timer = window.setTimeout(poll, 60)
+    }).catch(showError)
     return () => {
       cancelled = true
       if (timer !== undefined) window.clearTimeout(timer)
+      if (inputTimer !== undefined) window.clearTimeout(inputTimer)
+      resizeObserver.disconnect()
+      inputDisposable.dispose()
+      terminal.dispose()
     }
   }, [project.id, project.path])
-
-  useEffect(() => {
-    const root = outputRoot.current
-    if (root !== null) root.scrollTop = root.scrollHeight
-  }, [output])
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault()
-    if (sessionId === null || input.trim() === '' || busy || status !== 'running') return
-    const command = input
-    setInput('')
-    setBusy(true)
-    try {
-      const next = await terminalRequest('/api/personal-studio/send-terminal', { sessionId, command, offset: offset.current })
-      offset.current = next.offset
-      setStatus(next.status)
-      setOutput(previous => previous + next.output)
-      setError('')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    } finally {
-      setBusy(false)
-    }
-  }
 
   return <aside className="dsh-studio-ai-sidebar dsh-studio-terminal-sidebar">
     <div className="dsh-studio-ai-sidebar-head">
       <span className="status" />
       <div className="title"><strong>Terminal</strong><span>{project.name}</span></div>
-      <span className="dsh-studio-terminal-shell">{shell === 'powershell' ? 'PowerShell' : 'macOS Shell'}</span>
+      <span className="dsh-studio-terminal-shell">{shell === 'gemini' ? 'Gemini BAT · ConPTY' : 'macOS PTY'}</span>
       <button className="close" type="button" aria-label="收起终端" title="收起终端" onClick={onClose}><IconCloseOutline16 size={14} /></button>
     </div>
-    <div ref={outputRoot} className="dsh-studio-terminal-body">
-      {output === '' && error === ''
-        ? <div className="dsh-studio-terminal-empty">终端已连接到当前项目<br />输入命令开始工作</div>
-        : <pre className="dsh-studio-terminal-output">{output}{error !== '' ? `\n${error}` : ''}</pre>}
-    </div>
-    <form className="dsh-studio-terminal-form" onSubmit={event => { void submit(event) }}>
-      <span className="dsh-studio-terminal-prompt">❯</span>
-      <input className="dsh-studio-terminal-input" value={input} onChange={event => { setInput(event.target.value) }} placeholder={status === 'running' ? '输入命令…' : '终端已退出'} disabled={sessionId === null || status !== 'running'} autoComplete="off" spellCheck={false} />
-      <button className="dsh-studio-terminal-submit" type="submit" aria-label="运行命令" disabled={sessionId === null || input.trim() === '' || busy || status !== 'running'}><IconChevronRightOutline14 size={15} /></button>
-    </form>
+    <div ref={terminalRoot} className="dsh-studio-terminal-body" aria-label={sessionId === null ? '正在连接终端' : '项目终端'} />
   </aside>
 }
 
@@ -2297,7 +2313,7 @@ export function apply(ctx: any): void {
   ctx.effect(() => {
     const style = document.createElement('style')
     style.setAttribute('data-dsh-plugin', 'dsh-personal-studio')
-    style.textContent = styles
+    style.textContent = `${xtermCss}\n${styles}`
     document.head.appendChild(style)
     return () => {
       style.remove()

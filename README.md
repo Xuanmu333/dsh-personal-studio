@@ -70,9 +70,13 @@ pnpm run dsh --profile web
 
 Windows 版本会通过系统命令解释器启动 `npm`、`pnpm` 或 `yarn` 项目，并在插件关闭时清理对应的子进程树。
 
-在 Windows 中打开内嵌 Terminal 时，插件会为该 PowerShell 会话加载预设的 Lenovo 代理、`moto-gemini-assist` Google Cloud 项目，并在当前项目根目录自动运行 `gemini`。该会话通过 `GEMINI_CLI_TRUST_WORKSPACE=true` 信任用户主动在 Personal Studio 中打开的项目，以支持 Gemini CLI 的无交互启动。这些环境变量只作用于该终端子进程，不修改 Windows 的全局环境变量；内嵌 PowerShell 自身会保持运行，因此不需要再执行 `cmd /k`。
+选中项目后，顶部 Terminal 按钮会在 Personal Studio 内展开项目终端侧栏，并以项目目录为工作目录：macOS 使用当前 shell；Windows 使用 ConPTY 与 xterm 创建真正的交互式 `cmd.exe` 终端，并自动调用：
 
-选中项目后，顶部终端按钮会在 Personal Studio 内展开项目终端侧栏，并以项目目录为工作目录：macOS 使用当前 shell，Windows 使用 PowerShell。
+```text
+D:\AI Projects\GCA\start_proxy_moto_gemini.bat
+```
+
+该 BAT 文件必须存在于上述固定路径。代理、Google Cloud 项目和 Gemini 启动参数均由 BAT 管理；插件仅为这个终端子进程补充 `GEMINI_CLI_TRUST_WORKSPACE=true`，不会修改 Windows 全局环境。终端外层已经由 `cmd.exe /k` 保持运行，因此建议删除 BAT 文件末尾多余的 `cmd /k`，避免 Gemini 退出后进入嵌套命令行。
 
 工作日志默认保存到 `~/Documents/Obsidian Vault/06 工作明细/工作日志`。可通过 `DSH_PERSONAL_STUDIO_WORK_LOG_DIR` 环境变量覆盖该目录。
 

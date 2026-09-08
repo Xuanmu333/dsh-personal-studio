@@ -4,6 +4,8 @@ import { existsSync, promises as fs } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
+import * as nodePty from 'node-pty'
+import type { IPty } from 'node-pty'
 
 export const name = 'dsh-personal-studio'
 export const inject = ['webServer']
@@ -11,9 +13,9 @@ export const inject = ['webServer']
 type RunningProject = { child: ChildProcess; url: string }
 type EmbeddedTerminal = {
   id: string
-  child: ChildProcess
+  child: IPty
   root: string
-  shell: 'terminal' | 'powershell'
+  shell: 'terminal' | 'gemini'
   output: string
   baseOffset: number
   status: 'running' | 'exited'
@@ -23,13 +25,9 @@ const terminals = new Map<string, EmbeddedTerminal>()
 const terminalByRoot = new Map<string, string>()
 const TERMINAL_OUTPUT_LIMIT = 200_000
 const WINDOWS_GEMINI_ENV = {
-  HTTPS_PROXY: 'http://hkhkg01proxy02.lenovo.com:3128',
-  HTTP_PROXY: 'http://hkhkg01proxy02.lenovo.com:3128',
-  grpc_proxy: 'http://hkhkg01proxy02.lenovo.com:3128',
-  no_proxy: 'storage.googleapis.com,.ubuntu.com,.aliyun.com,.163.com,.mot.com,.lenovo.com,.motorola.com,10.0.0.0/8,100.64.0.0/11,127.0.0.1,127.0.1,1localhost',
-  GOOGLE_CLOUD_PROJECT: 'moto-gemini-assist',
   GEMINI_CLI_TRUST_WORKSPACE: 'true',
 } as const
+const WINDOWS_GEMINI_BAT = 'D:\\AI Projects\\GCA\\start_proxy_moto_gemini.bat'
 const WORK_LOG_DIRECTORY = process.env.DSH_PERSONAL_STUDIO_WORK_LOG_DIR
   ? resolve(process.env.DSH_PERSONAL_STUDIO_WORK_LOG_DIR)
   : join(homedir(), 'Documents', 'Obsidian Vault', '06 工作明细', '工作日志')
@@ -151,7 +149,7 @@ async function createProjectDirectory(parentPath: string, name: string): Promise
 }
 
 function appendTerminalOutput(terminal: EmbeddedTerminal, value: string): void {
-  terminal.output += value.replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '').replace(/\r\n?/gu, '\n')
+  terminal.output += value
   if (terminal.output.length <= TERMINAL_OUTPUT_LIMIT) return
   const remove = terminal.output.length - TERMINAL_OUTPUT_LIMIT
   terminal.output = terminal.output.slice(remove)
@@ -193,47 +191,37 @@ async function openProjectTerminal(projectPath: string): Promise<EmbeddedTermina
   if (active?.status === 'running') return active
 
   const command = process.platform === 'darwin' ? process.env.SHELL || '/bin/zsh'
-    : process.platform === 'win32' ? 'powershell.exe'
+    : process.platform === 'win32' ? 'cmd.exe'
       : undefined
   if (command === undefined) throw new Error('当前系统暂不支持项目终端')
   const args = process.platform === 'darwin'
     ? ['-l']
-    : ['-NoLogo', '-NoExit', '-Command', '-']
-  const child = spawn(command, args, {
+    : ['/d', '/q', '/k', `chcp 65001>nul & call "${WINDOWS_GEMINI_BAT}"`]
+  const child = nodePty.spawn(command, args, {
+    name: 'xterm-256color',
+    cols: 100,
+    rows: 30,
     cwd: root,
-    shell: false,
-    windowsHide: true,
     env: process.platform === 'win32' ? windowsGeminiEnvironment() : process.env,
-    stdio: ['pipe', 'pipe', 'pipe'],
+    useConpty: process.platform === 'win32',
   })
   const terminal: EmbeddedTerminal = {
     id: randomUUID(),
     child,
     root,
-    shell: process.platform === 'darwin' ? 'terminal' : 'powershell',
+    shell: process.platform === 'darwin' ? 'terminal' : 'gemini',
     output: '',
     baseOffset: 0,
     status: 'running',
   }
-  child.stdout?.setEncoding('utf8')
-  child.stderr?.setEncoding('utf8')
-  child.stdout?.on('data', value => { appendTerminalOutput(terminal, String(value)) })
-  child.stderr?.on('data', value => { appendTerminalOutput(terminal, String(value)) })
-  child.once('exit', code => {
+  child.onData(value => { appendTerminalOutput(terminal, value) })
+  child.onExit(({ exitCode }) => {
     terminal.status = 'exited'
-    appendTerminalOutput(terminal, `\n[终端已退出${code === null ? '' : `，代码 ${code}`} ]\n`)
+    appendTerminalOutput(terminal, `\r\n[终端已退出，代码 ${exitCode}]\r\n`)
     terminalByRoot.delete(root)
-  })
-  await new Promise<void>((accept, reject) => {
-    child.once('error', reject)
-    child.once('spawn', accept)
   })
   terminals.set(terminal.id, terminal)
   terminalByRoot.set(root, terminal.id)
-  if (process.platform === 'win32') {
-    child.stdin?.write('[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding\n')
-    child.stdin?.write('gemini\n')
-  }
   return terminal
 }
 
@@ -364,14 +352,34 @@ export function apply(ctx: any): void {
           return
         }
         try {
-          const body = await requestBody(req) as { sessionId?: unknown; command?: unknown; offset?: unknown }
+          const body = await requestBody(req) as { sessionId?: unknown; data?: unknown; offset?: unknown }
           const terminal = requireTerminal(body.sessionId)
-          if (terminal.status !== 'running' || terminal.child.stdin === null) throw new Error('终端已退出，请重新打开')
-          if (typeof body.command !== 'string') throw new Error('缺少终端输入')
-          appendTerminalOutput(terminal, `\n❯ ${body.command}\n`)
-          terminal.child.stdin.write(`${body.command}\n`)
+          if (terminal.status !== 'running') throw new Error('终端已退出，请重新打开')
+          if (typeof body.data !== 'string' || body.data === '') throw new Error('缺少终端输入')
+          terminal.child.write(body.data)
           const offset = typeof body.offset === 'number' && Number.isFinite(body.offset) ? body.offset : terminal.baseOffset
           json(res, 200, terminalSnapshot(terminal, offset))
+        } catch (reason) {
+          json(res, 422, { error: reason instanceof Error ? reason.message : String(reason) })
+        }
+      },
+    })
+    const unregisterResizeTerminal = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/personal-studio/resize-terminal',
+      handler: async (req: any, res: any) => {
+        if (req.method !== 'POST') {
+          json(res, 405, { error: '只支持 POST 请求' })
+          return
+        }
+        try {
+          const body = await requestBody(req) as { sessionId?: unknown; columns?: unknown; rows?: unknown }
+          const terminal = requireTerminal(body.sessionId)
+          const columns = typeof body.columns === 'number' ? Math.floor(body.columns) : 0
+          const rows = typeof body.rows === 'number' ? Math.floor(body.rows) : 0
+          if (columns < 20 || columns > 320 || rows < 5 || rows > 200) throw new Error('终端尺寸无效')
+          terminal.child.resize(columns, rows)
+          json(res, 200, { resized: true })
         } catch (reason) {
           json(res, 422, { error: reason instanceof Error ? reason.message : String(reason) })
         }
@@ -435,12 +443,13 @@ export function apply(ctx: any): void {
       unregisterOpenTerminal()
       unregisterReadTerminal()
       unregisterSendTerminal()
+      unregisterResizeTerminal()
       unregisterReadWorkLog()
       unregisterSaveWorkLog()
       unregisterListWorkLogs()
       for (const { child } of running.values()) stopProject(child)
       running.clear()
-      for (const terminal of terminals.values()) stopProject(terminal.child)
+      for (const terminal of terminals.values()) terminal.child.kill()
       terminals.clear()
       terminalByRoot.clear()
     }
