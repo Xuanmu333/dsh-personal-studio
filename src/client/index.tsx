@@ -1,8 +1,8 @@
 import {
-  useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore,
+  useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type DragEvent, type FormEvent,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { PanelsTopLeft, SquareTerminal } from 'lucide-react'
+import { CalendarDays, Check, ChevronLeft, ChevronRight, PanelsTopLeft, SquareTerminal } from 'lucide-react'
 import {
   IconChevronRightOutline14,
   IconCloseOutline16,
@@ -27,6 +27,20 @@ type PreviewState =
   | { status: 'workspace' }
   | { status: 'ready'; url: string }
   | { status: 'unavailable'; message: string }
+
+type TerminalSnapshot = {
+  sessionId: string
+  shell: 'terminal' | 'powershell'
+  output: string
+  offset: number
+  status: 'running' | 'exited'
+}
+
+type WorkLogSnapshot = {
+  date: string
+  content: string
+  exists: boolean
+}
 
 type ProjectSection = {
   id: string
@@ -73,7 +87,45 @@ type StudioState = {
 const STORAGE_KEY = 'dsh.personal-studio.projects.v1'
 const THEME_KEY = 'dsh.personal-studio.theme.v1'
 const BRAND_KEY = 'dsh.personal-studio.brand.v1'
+const WORK_LOG_DRAFT_PREFIX = 'dsh.personal-studio.work-log.draft.'
+const TOOL_ORDER_KEY = 'dsh.personal-studio.tool-order.v1'
+const DEFAULT_TOOL_ORDER = ['calendar', 'terminal', 'ai'] as const
+type ToolId = typeof DEFAULT_TOOL_ORDER[number]
 const DEFAULT_BRAND: Brand = { name: 'DSH Personal Studio', tagline: '个人智能工作空间', logo: '' }
+
+function loadToolOrder(): ToolId[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(TOOL_ORDER_KEY) ?? 'null')
+    if (!Array.isArray(value) || value.length !== DEFAULT_TOOL_ORDER.length) return [...DEFAULT_TOOL_ORDER]
+    if (!DEFAULT_TOOL_ORDER.every(tool => value.includes(tool))) return [...DEFAULT_TOOL_ORDER]
+    return value as ToolId[]
+  } catch { return [...DEFAULT_TOOL_ORDER] }
+}
+
+function storeToolOrder(order: ToolId[]): void {
+  try { localStorage.setItem(TOOL_ORDER_KEY, JSON.stringify(order)) } catch { /* Browser storage may be unavailable. */ }
+}
+
+function loadWorkLogDraft(date: string): string | null {
+  try { return localStorage.getItem(`${WORK_LOG_DRAFT_PREFIX}${date}`) } catch { return null }
+}
+
+function storeWorkLogDraft(date: string, content: string): void {
+  try { localStorage.setItem(`${WORK_LOG_DRAFT_PREFIX}${date}`, content) } catch { /* Browser storage may be unavailable. */ }
+}
+
+function clearWorkLogDraft(date: string): void {
+  try { localStorage.removeItem(`${WORK_LOG_DRAFT_PREFIX}${date}`) } catch { /* Browser storage may be unavailable. */ }
+}
+
+function listWorkLogDraftDates(month: string): string[] {
+  try {
+    const prefix = `${WORK_LOG_DRAFT_PREFIX}${month}-`
+    return Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+      .filter((key): key is string => key?.startsWith(prefix) === true)
+      .map(key => key.slice(WORK_LOG_DRAFT_PREFIX.length))
+  } catch { return [] }
+}
 
 function loadProjects(): Project[] {
   try {
@@ -191,14 +243,42 @@ async function launchProjectPreview(path: string): Promise<Extract<PreviewState,
   throw new Error('无法识别项目启动方式')
 }
 
-async function openProjectTerminal(path: string): Promise<void> {
-  const response = await fetch('/api/personal-studio/open-terminal', {
+async function terminalRequest(path: string, body: Record<string, unknown>): Promise<TerminalSnapshot> {
+  const response = await fetch(path, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path }),
+    body: JSON.stringify(body),
   })
-  const value = await response.json() as { error?: string }
-  if (!response.ok) throw new Error(value.error ?? '无法打开项目终端')
+  const value = await response.json() as TerminalSnapshot & { error?: string }
+  if (!response.ok) throw new Error(value.error ?? '终端请求失败')
+  return value
+}
+
+async function openProjectTerminal(path: string): Promise<TerminalSnapshot> {
+  return await terminalRequest('/api/personal-studio/open-terminal', { path })
+}
+
+async function workLogRequest<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const value = await response.json() as T & { error?: string }
+  if (!response.ok) throw new Error(value.error ?? '工作日志请求失败')
+  return value
+}
+
+async function readWorkLog(date: string): Promise<WorkLogSnapshot> {
+  return await workLogRequest<WorkLogSnapshot>('/api/personal-studio/read-work-log', { date })
+}
+
+async function saveWorkLog(date: string, content: string): Promise<void> {
+  await workLogRequest<{ saved: true }>('/api/personal-studio/save-work-log', { date, content })
+}
+
+async function listWorkLogs(month: string): Promise<string[]> {
+  return (await workLogRequest<{ dates: string[] }>('/api/personal-studio/list-work-logs', { month })).dates
 }
 
 async function createProjectDirectory(parentPath: string, name: string): Promise<string> {
@@ -517,7 +597,9 @@ html[data-dsh-studio-active] [data-dsh-studio-footer-actions] {
 .dsh-studio-topbar h1 { margin: 0; font-size: 14px; font-weight: 590; letter-spacing: .01em; }
 .dsh-studio-topbar .path { color: #536b81; font-size: 10px; }
 .dsh-studio-topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 9px; }
-.dsh-studio-ai-toggle { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: #71879b; cursor: pointer; }
+.dsh-studio-ai-toggle { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: #71879b; cursor: grab; transition: color 140ms ease, background-color 140ms ease, opacity 140ms ease, transform 180ms cubic-bezier(.2,.8,.2,1); }
+.dsh-studio-ai-toggle:active { cursor: grabbing; transform: scale(.94); }
+.dsh-studio-ai-toggle.dragging { opacity: .48; transform: scale(.9); }
 .dsh-studio-ai-toggle svg { transform: scaleX(-1); }
 .dsh-studio-terminal-toggle svg { transform: none; }
 .dsh-studio-ai-toggle:hover, .dsh-studio-ai-toggle.active { background: rgba(75,168,255,.12); color: #7dc3ff; }
@@ -603,6 +685,55 @@ html[data-dsh-studio-active] [data-dsh-studio-conversation][data-studio-switchin
 .dsh-studio-ai-modes { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: rgba(64,113,151,.1); }
 .dsh-studio-ai-modes button { height: 24px; padding: 0 9px; border-radius: 6px; color: #6e8498; font-size: 9px; }
 .dsh-studio-ai-modes button.active { background: rgba(75,168,255,.16); color: #79c2ff; }
+.dsh-studio-terminal-sidebar { display: flex; flex-direction: column; }
+.dsh-studio-terminal-shell { margin-left: auto; padding: 4px 8px; border-radius: 7px; background: rgba(64,113,151,.1); color: #70869a; font: 500 9px/1 var(--studio-font-text); }
+.dsh-studio-terminal-body { min-height: 0; flex: 1; overflow: auto; padding: 16px 17px 24px; background: rgba(0,0,0,.17); scroll-behavior: smooth; }
+.dsh-studio-terminal-output { min-height: 100%; margin: 0; color: #c4d5e3; font: 12px/1.65 "SFMono-Regular", "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dsh-studio-terminal-empty { display: grid; height: 100%; place-items: center; color: #60768b; font-size: 11px; text-align: center; }
+.dsh-studio-terminal-form { display: flex; align-items: center; gap: 8px; margin: 0 12px 12px; padding: 7px 8px 7px 12px; border: 1px solid rgba(96,166,220,.14); border-radius: 12px; background: rgba(255,255,255,.055); box-shadow: 0 8px 24px rgba(0,0,0,.14); }
+.dsh-studio-terminal-prompt { color: #57b1ff; font: 600 13px/1 "SFMono-Regular", "Cascadia Mono", Consolas, monospace; }
+.dsh-studio-terminal-input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--studio-ink); font: 12px/1.4 "SFMono-Regular", "Cascadia Mono", Consolas, monospace !important; }
+.dsh-studio-terminal-input::placeholder { color: var(--studio-dim); }
+.dsh-studio-terminal-submit { width: 29px; height: 29px; display: grid; flex: 0 0 29px; place-items: center; border: 0; border-radius: 9px; background: var(--studio-blue); color: white; cursor: pointer; }
+.dsh-studio-terminal-submit:disabled { opacity: .38; cursor: default; }
+.dsh-studio-calendar-sidebar { display: flex; flex-direction: column; }
+.dsh-studio-calendar-sidebar, .dsh-studio-ai-header-shell { animation: dsh-studio-panel-in 260ms cubic-bezier(.22,1,.36,1) both; }
+.dsh-studio-calendar-sidebar.closing, .dsh-studio-ai-header-shell.closing { pointer-events: none; animation: dsh-studio-panel-out 200ms cubic-bezier(.4,0,1,1) both; }
+@keyframes dsh-studio-panel-in {
+  from { opacity: .35; transform: translateX(calc(100% + 28px)); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes dsh-studio-panel-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: .25; transform: translateX(calc(100% + 28px)); }
+}
+.dsh-studio-calendar-main { min-height: 0; flex: 1; display: flex; flex-direction: column; gap: 14px; padding: 14px; overflow: hidden; }
+.dsh-studio-calendar-card { flex: 0 0 auto; padding: 12px; border: 1px solid rgba(96,166,220,.12); border-radius: 13px; background: rgba(255,255,255,.045); }
+.dsh-studio-calendar-nav { height: 30px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.dsh-studio-calendar-nav strong { color: var(--studio-ink); font-size: 12px; font-weight: 620; letter-spacing: -.01em; }
+.dsh-studio-calendar-nav button { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--studio-muted); cursor: pointer; }
+.dsh-studio-calendar-nav button:hover { background: var(--studio-fill-hover); color: var(--studio-ink); }
+.dsh-studio-calendar-weekdays, .dsh-studio-calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.dsh-studio-calendar-weekdays span { padding: 3px 0 5px; color: var(--studio-dim); font-size: 9px; font-weight: 600; text-align: center; }
+.dsh-studio-calendar-day { position: relative; aspect-ratio: 1; display: grid; place-items: center; border: 0; border-radius: 9px; background: transparent; color: var(--studio-muted); font-size: 10px; cursor: pointer; }
+.dsh-studio-calendar-day:hover { background: var(--studio-fill-hover); color: var(--studio-ink); }
+.dsh-studio-calendar-day.today { color: #409cff; font-weight: 650; }
+.dsh-studio-calendar-day.selected { background: var(--studio-blue); color: #fff; font-weight: 650; box-shadow: 0 4px 12px rgba(10,132,255,.24); }
+.dsh-studio-calendar-day.has-note::after { position: absolute; bottom: 3px; width: 3px; height: 3px; border-radius: 50%; background: currentColor; content: ""; opacity: .72; }
+.dsh-studio-calendar-day.has-draft::before { position: absolute; top: 3px; right: 3px; width: 4px; height: 4px; border-radius: 50%; background: #ff9f0a; content: ""; }
+.dsh-studio-calendar-day.blank { pointer-events: none; }
+.dsh-studio-note-card { min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; border: 1px solid rgba(96,166,220,.12); border-radius: 14px; background: rgba(255,255,255,.045); }
+.dsh-studio-note-head { min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 13px; color: var(--studio-muted); }
+.dsh-studio-note-head strong { color: var(--studio-ink); font-size: 12px; font-weight: 610; }
+.dsh-studio-note-head span { margin-left: auto; color: var(--studio-dim); font-size: 9px; }
+.dsh-studio-note-editor { width: 100%; min-height: 0; flex: 1; resize: none; box-sizing: border-box; padding: 4px 14px 14px; border: 0; outline: 0; background: transparent; color: var(--studio-ink); font-size: 12px; line-height: 1.7; letter-spacing: .002em; }
+.dsh-studio-note-editor::placeholder { color: var(--studio-dim); }
+.dsh-studio-note-actions { min-height: 52px; display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-top: 1px solid rgba(96,166,220,.1); }
+.dsh-studio-note-feedback { flex: 1; color: var(--studio-dim); font-size: 10px; }
+.dsh-studio-note-save { height: 34px; display: flex; align-items: center; gap: 6px; padding: 0 13px; border: 0; border-radius: 10px; background: var(--studio-blue); color: white; font-size: 11px; font-weight: 620; cursor: pointer; }
+.dsh-studio-note-save.secondary { background: var(--studio-fill); color: var(--studio-ink); }
+.dsh-studio-note-save.secondary:hover { background: var(--studio-fill-hover); }
+.dsh-studio-note-save:disabled { opacity: .45; cursor: default; }
 
 html[data-dsh-studio-theme="light"] {
   color-scheme: light;
@@ -901,6 +1032,13 @@ html[data-dsh-studio-theme="light"] .dsh-studio-topbar .path, html[data-dsh-stud
 html[data-dsh-studio-theme="light"] .dsh-studio-ai-modes { background: rgba(120,120,128,.09); }
 html[data-dsh-studio-theme="light"] .dsh-studio-ai-modes button { color: var(--studio-muted); }
 html[data-dsh-studio-theme="light"] .dsh-studio-ai-modes button.active { background: rgba(255,255,255,.9); color: var(--studio-ink); box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+html[data-dsh-studio-theme="light"] .dsh-studio-terminal-shell { background: rgba(120,120,128,.09); color: var(--studio-muted); }
+html[data-dsh-studio-theme="light"] .dsh-studio-terminal-body { background: rgba(248,249,251,.78); }
+html[data-dsh-studio-theme="light"] .dsh-studio-terminal-output { color: #263543; }
+html[data-dsh-studio-theme="light"] .dsh-studio-terminal-form { border-color: rgba(60,60,67,.12); background: rgba(255,255,255,.92); box-shadow: 0 8px 24px rgba(35,45,55,.08); }
+html[data-dsh-studio-theme="light"] .dsh-studio-calendar-card,
+html[data-dsh-studio-theme="light"] .dsh-studio-note-card { border-color: rgba(60,60,67,.1); background: rgba(255,255,255,.72); }
+html[data-dsh-studio-theme="light"] .dsh-studio-note-actions { border-top-color: rgba(60,60,67,.09); }
 html[data-dsh-studio-theme="light"] .dsh-studio-surface { border-color: rgba(60,60,67,.1); background: rgba(255,255,255,.76); box-shadow: 0 16px 44px rgba(0,0,0,.09), 0 1px 0 rgba(255,255,255,.9) inset; }
 html[data-dsh-studio-theme="light"] .dsh-studio-pane, html[data-dsh-studio-theme="light"] .dsh-studio-pane:nth-of-type(even) { background: rgba(255,255,255,.58); }
 html[data-dsh-studio-theme="light"] .dsh-studio-project-pane strong { color: var(--studio-ink); }
@@ -912,6 +1050,8 @@ html[data-dsh-studio-theme="light"] .dsh-studio-ai-sidebar-head .title strong { 
 
 @media (prefers-reduced-motion: reduce) {
   .dsh-studio-stage, html[data-dsh-studio-active] [data-dsh-studio-conversation] { transition: opacity 160ms ease !important; }
+  .dsh-studio-calendar-sidebar, .dsh-studio-calendar-sidebar.closing,
+  .dsh-studio-ai-header-shell, .dsh-studio-ai-header-shell.closing { transform: none; animation: none; }
   .dsh-studio-project-row:active, .dsh-studio-theme-button:active, .dsh-studio-rail-button:active,
   .dsh-studio-menu button:active, .dsh-studio-icon-button:active, .dsh-studio-folder-button:active,
   .dsh-studio-button:active, .dsh-studio-ai-toggle:active,
@@ -1593,7 +1733,10 @@ function PersonalSidebar(props: any) {
       </header>
       <button className="dsh-studio-new-session" type="button" aria-label="新建会话" onClick={() => { studio.setActive(null); startSession() }}><IconPlusOutline16 size={wide ? 14 : 18} />{wide && <span>新建会话</span>}</button>
       <div className="dsh-studio-navigation" onContextMenu={event => { if ((event.target as HTMLElement).closest('button') === null) showContext(event) }}>
-        <div className="dsh-studio-native-workspaces">{renderSlot('sidebar.workspaces', { wide, expandSidebar: () => { if (!wide) toggleSidebar() } })}</div>
+        <div className="dsh-studio-native-workspaces" onClickCapture={event => {
+          const target = event.target instanceof Element ? event.target : null
+          if (target?.closest('[role="treeitem"][aria-selected]') !== null) studio.setActive(null)
+        }}>{renderSlot('sidebar.workspaces', { wide, expandSidebar: () => { if (!wide) toggleSidebar() } })}</div>
         <div className="dsh-studio-project-list" role="tree" aria-label="项目">
           {state.projects.map(project => (
             <button key={project.id} type="button" role="treeitem" className={`dsh-studio-project-row${state.activeId === project.id ? ' active' : ''}`} onClick={() => { openProject(project) }} onContextMenu={event => { showContext(event, project) }}>
@@ -1717,13 +1860,251 @@ function findConversationRoot(): HTMLElement | null {
   return scrolls.item(scrolls.length - 1)?.parentElement ?? null
 }
 
+function localDateKey(date: Date): string {
+  const year = String(date.getFullYear()).padStart(4, '0')
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function CalendarPanel({ closing, onClose, onDirtyChange }: { closing: boolean; onClose: () => void; onDirtyChange: (dirty: boolean) => void }) {
+  const today = localDateKey(new Date())
+  const [selectedDate, setSelectedDate] = useState(today)
+  const [month, setMonth] = useState(today.slice(0, 7))
+  const [content, setContent] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [dirty, setDirty] = useState(false)
+  const [storedAsDraft, setStoredAsDraft] = useState(false)
+  const [feedback, setFeedback] = useState('')
+  const [noteDates, setNoteDates] = useState<string[]>([])
+  const [draftDates, setDraftDates] = useState<string[]>(() => listWorkLogDraftDates(today.slice(0, 7)))
+  const [year, monthNumber] = month.split('-').map(Number)
+  const firstWeekday = new Date(year!, monthNumber! - 1, 1).getDay()
+  const dayCount = new Date(year!, monthNumber!, 0).getDate()
+  const cellCount = Math.ceil((firstWeekday + dayCount) / 7) * 7
+
+  useEffect(() => {
+    let cancelled = false
+    setDraftDates(listWorkLogDraftDates(month))
+    void listWorkLogs(month).then(dates => { if (!cancelled) setNoteDates(dates) }).catch(() => { if (!cancelled) setNoteDates([]) })
+    return () => { cancelled = true }
+  }, [month])
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setFeedback('')
+    void readWorkLog(selectedDate).then(note => {
+      if (cancelled) return
+      const draft = loadWorkLogDraft(selectedDate)
+      setContent(draft ?? note.content)
+      setDirty(false)
+      setStoredAsDraft(draft !== null)
+      setFeedback(draft !== null ? '已恢复临时保存' : '')
+      onDirtyChange(false)
+      setLoading(false)
+    }).catch(reason => {
+      if (cancelled) return
+      setFeedback(reason instanceof Error ? reason.message : String(reason))
+      setLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [selectedDate, onDirtyChange])
+
+  const chooseDate = (date: string) => {
+    if (date === selectedDate) return
+    if (dirty && !window.confirm('当前日志尚未保存，要放弃修改并切换日期吗？')) return
+    setSelectedDate(date)
+  }
+  const moveMonth = (delta: number) => {
+    const next = new Date(year!, monthNumber! - 1 + delta, 1)
+    setMonth(localDateKey(next).slice(0, 7))
+  }
+  const saveDraft = () => {
+    if (loading || saving) return
+    storeWorkLogDraft(selectedDate, content)
+    setDirty(false)
+    setStoredAsDraft(true)
+    onDirtyChange(false)
+    setDraftDates(dates => dates.includes(selectedDate) ? dates : [...dates, selectedDate])
+    setFeedback('已临时保存')
+  }
+  const saveToObsidian = async () => {
+    if (loading || saving) return
+    setSaving(true)
+    setFeedback('')
+    try {
+      await saveWorkLog(selectedDate, content)
+      clearWorkLogDraft(selectedDate)
+      setDirty(false)
+      setStoredAsDraft(false)
+      onDirtyChange(false)
+      setNoteDates(dates => dates.includes(selectedDate) ? dates : [...dates, selectedDate])
+      setDraftDates(dates => dates.filter(date => date !== selectedDate))
+      setFeedback('已保存到 Obsidian')
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return <aside className={`dsh-studio-ai-sidebar dsh-studio-calendar-sidebar${closing ? ' closing' : ''}`}>
+    <div className="dsh-studio-ai-sidebar-head">
+      <span className="status" />
+      <div className="title"><strong>工作日志</strong><span>Obsidian 日历便笺</span></div>
+      <button className="close" type="button" aria-label="收起工作日志" title="收起工作日志" onClick={onClose}><IconCloseOutline16 size={14} /></button>
+    </div>
+    <div className="dsh-studio-calendar-main">
+      <section className="dsh-studio-calendar-card" aria-label="选择日期">
+        <div className="dsh-studio-calendar-nav">
+          <button type="button" aria-label="上个月" onClick={() => { moveMonth(-1) }}><ChevronLeft size={15} /></button>
+          <strong>{year} 年 {monthNumber} 月</strong>
+          <button type="button" aria-label="下个月" onClick={() => { moveMonth(1) }}><ChevronRight size={15} /></button>
+        </div>
+        <div className="dsh-studio-calendar-weekdays">{['日', '一', '二', '三', '四', '五', '六'].map(day => <span key={day}>{day}</span>)}</div>
+        <div className="dsh-studio-calendar-grid">
+          {Array.from({ length: cellCount }, (_, index) => {
+            const day = index - firstWeekday + 1
+            if (day < 1 || day > dayCount) return <span className="dsh-studio-calendar-day blank" key={`blank-${index}`} />
+            const date = `${month}-${String(day).padStart(2, '0')}`
+            const classes = ['dsh-studio-calendar-day', date === today ? 'today' : '', date === selectedDate ? 'selected' : '', noteDates.includes(date) ? 'has-note' : '', draftDates.includes(date) ? 'has-draft' : ''].filter(Boolean).join(' ')
+            return <button className={classes} type="button" key={date} aria-label={date} onClick={() => { chooseDate(date) }}>{day}</button>
+          })}
+        </div>
+      </section>
+      <section className="dsh-studio-note-card">
+        <div className="dsh-studio-note-head"><strong>{selectedDate}</strong><span>{dirty ? '未保存' : storedAsDraft ? '临时保存' : '已同步'}</span></div>
+        <textarea className="dsh-studio-note-editor" value={content} onChange={event => { setContent(event.target.value); setDirty(true); onDirtyChange(true); setFeedback('') }} placeholder="记录今天的工作…" disabled={loading} spellCheck={false} />
+        <div className="dsh-studio-note-actions">
+          <span className="dsh-studio-note-feedback">{loading ? '正在读取…' : feedback}</span>
+          <button className="dsh-studio-note-save secondary" type="button" disabled={loading || saving || !dirty} onClick={saveDraft}>临时保存</button>
+          <button className="dsh-studio-note-save" type="button" disabled={loading || saving || (!dirty && !storedAsDraft)} onClick={() => { void saveToObsidian() }}><Check size={14} />{saving ? '保存中…' : '保存到 Obsidian'}</button>
+        </div>
+      </section>
+    </div>
+  </aside>
+}
+
+function TerminalPanel({ project, onClose }: { project: Project; onClose: () => void }) {
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [shell, setShell] = useState<TerminalSnapshot['shell']>('terminal')
+  const [status, setStatus] = useState<TerminalSnapshot['status']>('running')
+  const [output, setOutput] = useState('')
+  const [input, setInput] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const offset = useRef(0)
+  const outputRoot = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    let timer: number | undefined
+    setSessionId(null)
+    setOutput('')
+    setError('')
+    offset.current = 0
+
+    const append = (snapshot: TerminalSnapshot, replace = false) => {
+      offset.current = snapshot.offset
+      setSessionId(snapshot.sessionId)
+      setShell(snapshot.shell)
+      setStatus(snapshot.status)
+      setOutput(previous => replace ? snapshot.output : previous + snapshot.output)
+    }
+    const poll = async (id: string) => {
+      let running = true
+      try {
+        const next = await terminalRequest('/api/personal-studio/read-terminal', { sessionId: id, offset: offset.current })
+        if (cancelled) return
+        append(next)
+        running = next.status === 'running'
+        setError('')
+      } catch (reason) {
+        if (cancelled) return
+        setError(reason instanceof Error ? reason.message : String(reason))
+      }
+      if (!cancelled && running) timer = window.setTimeout(() => { void poll(id) }, 350)
+    }
+    void openProjectTerminal(project.path).then(opened => {
+      if (cancelled) return
+      append(opened, true)
+      timer = window.setTimeout(() => { void poll(opened.sessionId) }, 250)
+    }).catch(reason => {
+      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
+    })
+    return () => {
+      cancelled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [project.id, project.path])
+
+  useEffect(() => {
+    const root = outputRoot.current
+    if (root !== null) root.scrollTop = root.scrollHeight
+  }, [output])
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (sessionId === null || input.trim() === '' || busy || status !== 'running') return
+    const command = input
+    setInput('')
+    setBusy(true)
+    try {
+      const next = await terminalRequest('/api/personal-studio/send-terminal', { sessionId, command, offset: offset.current })
+      offset.current = next.offset
+      setStatus(next.status)
+      setOutput(previous => previous + next.output)
+      setError('')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <aside className="dsh-studio-ai-sidebar dsh-studio-terminal-sidebar">
+    <div className="dsh-studio-ai-sidebar-head">
+      <span className="status" />
+      <div className="title"><strong>Terminal</strong><span>{project.name}</span></div>
+      <span className="dsh-studio-terminal-shell">{shell === 'powershell' ? 'PowerShell' : 'macOS Shell'}</span>
+      <button className="close" type="button" aria-label="收起终端" title="收起终端" onClick={onClose}><IconCloseOutline16 size={14} /></button>
+    </div>
+    <div ref={outputRoot} className="dsh-studio-terminal-body">
+      {output === '' && error === ''
+        ? <div className="dsh-studio-terminal-empty">终端已连接到当前项目<br />输入命令开始工作</div>
+        : <pre className="dsh-studio-terminal-output">{output}{error !== '' ? `\n${error}` : ''}</pre>}
+    </div>
+    <form className="dsh-studio-terminal-form" onSubmit={event => { void submit(event) }}>
+      <span className="dsh-studio-terminal-prompt">❯</span>
+      <input className="dsh-studio-terminal-input" value={input} onChange={event => { setInput(event.target.value) }} placeholder={status === 'running' ? '输入命令…' : '终端已退出'} disabled={sessionId === null || status !== 'running'} autoComplete="off" spellCheck={false} />
+      <button className="dsh-studio-terminal-submit" type="submit" aria-label="运行命令" disabled={sessionId === null || input.trim() === '' || busy || status !== 'running'}><IconChevronRightOutline14 size={15} /></button>
+    </form>
+  </aside>
+}
+
 function StudioOverlay() {
   const state = useStudio()
   const project = state.projects.find(item => item.id === state.activeId)
   const [sidebarRight, setSidebarRight] = useState(0)
   const [aiProjectId, setAiProjectId] = useState<string | null>(null)
+  const [aiClosing, setAiClosing] = useState(false)
+  const [terminalProjectId, setTerminalProjectId] = useState<string | null>(null)
+  const [calendarProjectId, setCalendarProjectId] = useState<string | null>(null)
+  const [calendarDirty, setCalendarDirty] = useState(false)
+  const [calendarClosing, setCalendarClosing] = useState(false)
+  const [toolOrder, setToolOrder] = useState<ToolId[]>(loadToolOrder)
+  const [draggingTool, setDraggingTool] = useState<ToolId | null>(null)
+  const suppressToolClickUntil = useRef(0)
   const previousProjectId = useRef(project?.id)
+  const aiCloseTimer = useRef<number | undefined>(undefined)
+  const calendarCloseTimer = useRef<number | undefined>(undefined)
   const aiOpen = project !== undefined && aiProjectId === project.id
+  const terminalOpen = project !== undefined && terminalProjectId === project.id
+  const calendarOpen = project !== undefined && calendarProjectId === project.id
+  const aiHeaderVisible = aiOpen || aiClosing
+  const sidePanelOpen = aiHeaderVisible || terminalOpen || calendarOpen
 
   useLayoutEffect(() => {
     if (project === undefined) return
@@ -1789,15 +2170,85 @@ function StudioOverlay() {
 
   if (project === undefined) return null
 
+  const dismissCalendar = () => {
+    if (calendarOpen && calendarDirty && !window.confirm('当前日志尚未保存，要放弃修改吗？')) return false
+    if (!calendarOpen) return true
+    if (calendarCloseTimer.current !== undefined) window.clearTimeout(calendarCloseTimer.current)
+    setCalendarClosing(true)
+    calendarCloseTimer.current = window.setTimeout(() => {
+      setCalendarProjectId(null)
+      setCalendarDirty(false)
+      setCalendarClosing(false)
+      calendarCloseTimer.current = undefined
+    }, 200)
+    return true
+  }
+
+  const dismissAi = () => {
+    if (!aiOpen) return
+    if (aiCloseTimer.current !== undefined) window.clearTimeout(aiCloseTimer.current)
+    setAiClosing(true)
+    setAiProjectId(null)
+    aiCloseTimer.current = window.setTimeout(() => {
+      setAiClosing(false)
+      aiCloseTimer.current = undefined
+    }, 200)
+  }
+
   const handleMode = async (mode: AiMode, prompt?: string) => {
     try {
       const next = await openProjectMode(project, mode)
+      setTerminalProjectId(null)
+      if (aiCloseTimer.current !== undefined) window.clearTimeout(aiCloseTimer.current)
+      setAiClosing(false)
       setAiProjectId(next.id)
       const sessionId = next.sessions[mode]
       if (prompt && sessionId) await promptIntoSession(sessionId, prompt)
     } catch (reason) {
       window.alert(reason instanceof Error ? reason.message : String(reason))
     }
+  }
+  const moveTool = (target: ToolId) => {
+    if (draggingTool === null || draggingTool === target) return
+    setToolOrder(current => {
+      const next = current.filter(tool => tool !== draggingTool)
+      next.splice(current.indexOf(target), 0, draggingTool)
+      storeToolOrder(next)
+      return next
+    })
+  }
+  const toolButton = (tool: ToolId) => {
+    const common = {
+      draggable: true,
+      onDragStart: (event: DragEvent<HTMLButtonElement>) => {
+        event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.setData('text/plain', tool)
+        setDraggingTool(tool)
+      },
+      onDragEnter: () => { moveTool(tool) },
+      onDragOver: (event: DragEvent<HTMLButtonElement>) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move' },
+      onDrop: (event: DragEvent<HTMLButtonElement>) => { event.preventDefault(); moveTool(tool) },
+      onDragEnd: () => { suppressToolClickUntil.current = Date.now() + 250; setDraggingTool(null) },
+    }
+    if (tool === 'calendar') return <button key={tool} {...common} className={`dsh-studio-ai-toggle dsh-studio-terminal-toggle${calendarOpen ? ' active' : ''}${draggingTool === tool ? ' dragging' : ''}`} type="button" aria-label={calendarOpen ? '收起工作日志' : '展开工作日志'} title={`${calendarOpen ? '收起工作日志' : '展开工作日志'} · 可拖拽排序`} onClick={() => {
+      if (Date.now() < suppressToolClickUntil.current) return
+      if (calendarOpen) { dismissCalendar(); return }
+      dismissAi()
+      setTerminalProjectId(null)
+      if (calendarCloseTimer.current !== undefined) window.clearTimeout(calendarCloseTimer.current)
+      setCalendarClosing(false)
+      setCalendarProjectId(project.id)
+    }}><CalendarDays size={17} strokeWidth={1.8} /></button>
+    if (tool === 'terminal') return <button key={tool} {...common} className={`dsh-studio-ai-toggle dsh-studio-terminal-toggle${terminalOpen ? ' active' : ''}${draggingTool === tool ? ' dragging' : ''}`} type="button" aria-label={terminalOpen ? '收起终端' : '展开项目终端'} title={`${terminalOpen ? '收起终端' : '展开项目终端'} · 可拖拽排序`} onClick={() => {
+      if (Date.now() < suppressToolClickUntil.current) return
+      if (terminalOpen) setTerminalProjectId(null)
+      else if (dismissCalendar()) { dismissAi(); setTerminalProjectId(project.id) }
+    }}><SquareTerminal size={17} strokeWidth={1.8} /></button>
+    return <button key={tool} {...common} className={`dsh-studio-ai-toggle${aiOpen ? ' active' : ''}${draggingTool === tool ? ' dragging' : ''}`} type="button" aria-label={aiOpen ? '收起 AI 侧栏' : '展开 AI 侧栏'} title={`${aiOpen ? '收起 AI 侧栏' : '展开 AI 侧栏'} · 可拖拽排序`} onClick={() => {
+      if (Date.now() < suppressToolClickUntil.current) return
+      if (aiOpen) dismissAi()
+      else if (dismissCalendar()) { setTerminalProjectId(null); void handleMode(project.aiMode) }
+    }}><IconPanelLeftOutline16 size={17} /></button>
   }
   return (
     <>
@@ -1808,22 +2259,14 @@ function StudioOverlay() {
             <h1>Workspace</h1>
           </div>
           <div className="dsh-studio-topbar-actions">
-            <button className="dsh-studio-ai-toggle dsh-studio-terminal-toggle" type="button" aria-label="在终端中打开项目" title="在终端中打开项目" onClick={() => {
-              void openProjectTerminal(project.path).catch(reason => {
-                window.alert(reason instanceof Error ? reason.message : String(reason))
-              })
-            }}><SquareTerminal size={17} strokeWidth={1.8} /></button>
-            <button className={`dsh-studio-ai-toggle${aiOpen ? ' active' : ''}`} type="button" aria-label={aiOpen ? '收起 AI 侧栏' : '展开 AI 侧栏'} title={aiOpen ? '收起 AI 侧栏' : '展开 AI 侧栏'} onClick={() => {
-              if (aiOpen) setAiProjectId(null)
-              else void handleMode(project.aiMode)
-            }}><IconPanelLeftOutline16 size={17} /></button>
+            {toolOrder.map(toolButton)}
           </div>
         </header>
-        <div className={`dsh-studio-stage${aiOpen ? ' ai-open' : ''}`}>
+        <div className={`dsh-studio-stage${sidePanelOpen ? ' ai-open' : ''}`}>
           <SplitSurface project={project} />
         </div>
       </main>
-      {aiOpen && <aside className="dsh-studio-ai-sidebar">
+      {aiHeaderVisible && <aside className={`dsh-studio-ai-sidebar dsh-studio-ai-header-shell${aiClosing ? ' closing' : ''}`}>
         <div className="dsh-studio-ai-sidebar-head">
           <span className="status" />
           <div className="title"><strong>AI 助手</strong><span>{project.name}</span></div>
@@ -1831,9 +2274,11 @@ function StudioOverlay() {
             <button type="button" className={project.aiMode === 'analyze' ? 'active' : ''} onClick={() => { void handleMode('analyze') }}>分析</button>
             <button type="button" className={project.aiMode === 'build' ? 'active' : ''} onClick={() => { void handleMode('build') }}>构建</button>
           </div>
-          <button className="close" type="button" aria-label="收起 AI 侧栏" title="收起 AI 侧栏" onClick={() => { setAiProjectId(null) }}><IconCloseOutline16 size={14} /></button>
+          <button className="close" type="button" aria-label="收起 AI 侧栏" title="收起 AI 侧栏" onClick={dismissAi}><IconCloseOutline16 size={14} /></button>
         </div>
       </aside>}
+      {terminalOpen && <TerminalPanel project={project} onClose={() => { setTerminalProjectId(null) }} />}
+      {calendarOpen && <CalendarPanel closing={calendarClosing} onClose={() => { dismissCalendar() }} onDirtyChange={setCalendarDirty} />}
     </>
   )
 }

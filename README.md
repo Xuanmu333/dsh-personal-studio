@@ -12,6 +12,8 @@
 - 为每个项目分别保留“分析”和“构建”两种 AI 会话。
 - 项目默认使用简洁单画布。
 - AI 面板使用右上角按钮展开为 VS Code 风格的右侧边栏。
+- 右上角的日历、Terminal 与 AI 工具按钮支持拖拽排序，并在当前浏览器中记住顺序。
+- 日历工作台可按日编辑 Markdown 便笺：临时保存保留在当前浏览器中，保存到 Obsidian 后写入 `06 工作明细/工作日志/YYYY-MM-DD.md` 并清除该日临时稿。
 - 跟随 DSH 原生深色与浅色主题。
 
 ## AI 模式
@@ -68,7 +70,11 @@ pnpm run dsh --profile web
 
 Windows 版本会通过系统命令解释器启动 `npm`、`pnpm` 或 `yarn` 项目，并在插件关闭时清理对应的子进程树。
 
-选中项目后，顶部终端按钮会以项目目录为工作目录：macOS 打开 Terminal，Windows 打开 PowerShell。
+在 Windows 中打开内嵌 Terminal 时，插件会为该 PowerShell 会话加载预设的 Lenovo 代理、`moto-gemini-assist` Google Cloud 项目，并在当前项目根目录自动运行 `gemini`。这些环境变量只作用于该终端子进程，不修改 Windows 的全局环境变量；内嵌 PowerShell 自身会保持运行，因此不需要再执行 `cmd /k`。
+
+选中项目后，顶部终端按钮会在 Personal Studio 内展开项目终端侧栏，并以项目目录为工作目录：macOS 使用当前 shell，Windows 使用 PowerShell。
+
+工作日志默认保存到 `~/Documents/Obsidian Vault/06 工作明细/工作日志`。可通过 `DSH_PERSONAL_STUDIO_WORK_LOG_DIR` 环境变量覆盖该目录。
 
 ## 开发
 
