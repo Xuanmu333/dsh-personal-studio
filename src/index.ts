@@ -22,14 +22,6 @@ const running = new Map<string, RunningProject>()
 const terminals = new Map<string, EmbeddedTerminal>()
 const terminalByRoot = new Map<string, string>()
 const TERMINAL_OUTPUT_LIMIT = 200_000
-const WINDOWS_GEMINI_ENV = {
-  HTTPS_PROXY: 'http://hkhkg01proxy02.lenovo.com:3128',
-  HTTP_PROXY: 'http://hkhkg01proxy02.lenovo.com:3128',
-  grpc_proxy: 'http://hkhkg01proxy02.lenovo.com:3128',
-  no_proxy: 'storage.googleapis.com,.ubuntu.com,.aliyun.com,.163.com,.mot.com,.lenovo.com,.motorola.com,10.0.0.0/8,100.64.0.0/11,127.0.0.1,127.0.1,1localhost',
-  GOOGLE_CLOUD_PROJECT: 'moto-gemini-assist',
-  GEMINI_CLI_TRUST_WORKSPACE: 'true',
-} as const
 const WORK_LOG_DIRECTORY = process.env.DSH_PERSONAL_STUDIO_WORK_LOG_DIR
   ? resolve(process.env.DSH_PERSONAL_STUDIO_WORK_LOG_DIR)
   : join(homedir(), 'Documents', 'Obsidian Vault', '06 工作明细', '工作日志')
@@ -158,15 +150,6 @@ function appendTerminalOutput(terminal: EmbeddedTerminal, value: string): void {
   terminal.baseOffset += remove
 }
 
-function windowsGeminiEnvironment(): NodeJS.ProcessEnv {
-  const environment = { ...process.env }
-  const configuredNames = new Set(Object.keys(WINDOWS_GEMINI_ENV).map(name => name.toLowerCase()))
-  for (const name of Object.keys(environment)) {
-    if (configuredNames.has(name.toLowerCase())) delete environment[name]
-  }
-  return { ...environment, ...WINDOWS_GEMINI_ENV }
-}
-
 function terminalSnapshot(terminal: EmbeddedTerminal, offset = terminal.baseOffset): {
   sessionId: string
   shell: EmbeddedTerminal['shell']
@@ -198,12 +181,11 @@ async function openProjectTerminal(projectPath: string): Promise<EmbeddedTermina
   if (command === undefined) throw new Error('当前系统暂不支持项目终端')
   const args = process.platform === 'darwin'
     ? ['-l']
-    : ['-NoLogo', '-NoExit', '-Command', '-']
+    : ['-NoLogo', '-NoProfile', '-NoExit', '-Command', '-']
   const child = spawn(command, args, {
     cwd: root,
     shell: false,
     windowsHide: true,
-    env: process.platform === 'win32' ? windowsGeminiEnvironment() : process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   const terminal: EmbeddedTerminal = {
@@ -232,7 +214,6 @@ async function openProjectTerminal(projectPath: string): Promise<EmbeddedTermina
   terminalByRoot.set(root, terminal.id)
   if (process.platform === 'win32') {
     child.stdin?.write('[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding\n')
-    child.stdin?.write('gemini\n')
   }
   return terminal
 }
