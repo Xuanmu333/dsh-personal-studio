@@ -156,15 +156,6 @@ function appendTerminalOutput(terminal: EmbeddedTerminal, value: string): void {
   terminal.baseOffset += remove
 }
 
-function windowsGeminiEnvironment(): NodeJS.ProcessEnv {
-  const environment = { ...process.env }
-  const configuredNames = new Set(Object.keys(WINDOWS_GEMINI_ENV).map(name => name.toLowerCase()))
-  for (const name of Object.keys(environment)) {
-    if (configuredNames.has(name.toLowerCase())) delete environment[name]
-  }
-  return { ...environment, ...WINDOWS_GEMINI_ENV }
-}
-
 function terminalSnapshot(terminal: EmbeddedTerminal, offset = terminal.baseOffset): {
   sessionId: string
   shell: EmbeddedTerminal['shell']
